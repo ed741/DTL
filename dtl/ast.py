@@ -1,9 +1,5 @@
-# This is a sample Python script.
-
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 from dataclasses import dataclass
-from typing import List, Mapping, Dict
+from typing import List
 
 
 class VSpace():
@@ -123,21 +119,9 @@ class Lambda(astNode):
     def __str__(self) -> str:
         return f"{{{type(self).__name__}: {self.vars}:{self.sub}}}"
 
-
-
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
-
-
-# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    print_hi('PyCharm')
     i = Index("i")
     j = Index("j")
     A = Lambda([A:=TensorVariable("A")], deIndex(A[j, i], [i, j]))
     print(str([j, i]))
     print(str(A))
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/

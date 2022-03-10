@@ -117,7 +117,7 @@ class Lambda(astNode):
     vars : List[TensorVariable]
     sub : astNode
     def __str__(self) -> str:
-        return f"{{{type(self).__name__}: {self.vars}:{self.sub}}}"
+        return f"{type(self).__name__}({','.join(map(str, self.vars))}):{self.sub}"
 
 if __name__ == '__main__':
     i = Index("i")

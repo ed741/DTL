@@ -77,7 +77,10 @@ if __name__ == "__main__":
     j = Index("j")
     k = Index("k")
     T1 = Lambda([A := TensorVariable("A")], deIndex(A[j, i], [i, j]))
-    T2 = Lambda([A := TensorVariable("A"),B := TensorVariable("B")], (A[j, i]*Abs(B[j,i])|[i, j])[k]|[k])
+    T2 = Lambda(
+        [A := TensorVariable("A"), B := TensorVariable("B")],
+        (A[j, i] * Abs(B[j, i]) | [i, j])[k] | [k],
+    )
     # A = TensorVariable("A")
     # B = TensorVariable("B")
     # T2 = Lambda([A, B], A[k] | [k])

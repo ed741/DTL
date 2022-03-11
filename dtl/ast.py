@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from typing import List, Iterable
 
 
-class VSpace():
+class VSpace:
     def __init__(self):
         raise TypeError
+
     def __str__(self) -> str:
         return "(!!VSPACE!!)"
 
@@ -20,7 +21,6 @@ class RVSpace:
 
 
 class astNode(abc.ABC):
-
     @property
     @abc.abstractmethod
     def operands(self):
@@ -42,39 +42,48 @@ class Index(Terminal):
     def __str__(self) -> str:
         return self.name
 
+
 @dataclass
 class VarIndex(Index):
     var: str
+
     def __str__(self) -> str:
         return self.var
+
 
 @dataclass
 class IntIndex(Index):
     i: int
+
     def __str__(self) -> str:
         return str(self.i)
 
-class TensorExpr(astNode):
 
+class TensorExpr(astNode):
     def __str__(self) -> str:
         return "(!!TENSOR EXPR NODE TYPE!!)"
 
     def __getitem__(self, indices: List[Index]):
         if not isinstance(indices, collections.abc.Iterable):
-            indices = indices,
+            indices = (indices,)
         return IndexedTensor(self, indices)
+
 
 class ScalarExpr(astNode):
     def __str__(self) -> str:
         return "(!!Scalar Expr NODE TYPE!!)"
+
     def __or__(self, indices: List[Index]) -> "deIndex":
         return deIndex(self, indices)
+
     def __mul__(self, other: "ScalarExpr") -> "ScalarExpr":
         return MulBinOp(self, other)
 
+
 @dataclass
 class Literal(ScalarExpr):
-    f : float
+    f: float
+
     def __str__(self) -> str:
         return str(self.f)
 
@@ -115,7 +124,7 @@ class UnaryOp(ScalarExpr):
 
     @property
     def operands(self):
-        return self.tensor,
+        return (self.tensor,)
 
     def __str__(self) -> str:
         return f"{self.name}({self.tensor})"
@@ -169,7 +178,7 @@ class Lambda(astNode):
         return f"λ{','.join([str(v) for v in self.vars])}.{self.sub}"
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     i = Index("i")
     j = Index("j")
     k = Index("k")
@@ -177,7 +186,7 @@ if __name__ == '__main__':
     # T2 = Lambda([A := TensorVariable("A"),B := TensorVariable("B")], (A[j, i]*Abs(B[j,i])|[i, j])[k]|[k])
     A = TensorVariable("A")
     B = TensorVariable("B")
-    T2 = Lambda([A,B], A[k] | [k])
+    T2 = Lambda([A, B], A[k] | [k])
     print(str([j, i]))
     # print(str(T1))
     print(str(T2))

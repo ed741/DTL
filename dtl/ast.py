@@ -4,34 +4,36 @@ from dataclasses import dataclass
 from typing import List, Iterable
 
 
-class VSpace:
-    def __init__(self):
-        raise TypeError
+@dataclass
+class VectorSpace(abc.ABC):
+    dim: int
+
+    @property
+    @abc.abstractmethod
+    def symbol(self) -> str:
+        pass
 
     def __str__(self) -> str:
-        return "(!!VSPACE!!)"
+        return f"{self.symbol}{self.dim}"
+
+
+class RealVectorSpace(VectorSpace):
+    symbol = "R"
 
 
 @dataclass
-class RVSpace:
-    dim: int
-
-    def __str__(self) -> str:
-        return f"R{self.dim}"
+class TensorSpace:
+    spaces: Iterable[VectorSpace]
 
 
-class astNode(abc.ABC):
+class Node(abc.ABC):
     @property
     @abc.abstractmethod
     def operands(self):
         pass
 
-    def __str__(self) -> str:
-        return "(!!BASE NODE TYPE!!)"
 
-
-class Terminal(astNode):
-
+class Terminal(Node):
     operands = ()
 
 
@@ -59,22 +61,20 @@ class IntIndex(Index):
         return str(self.i)
 
 
-class TensorExpr(astNode):
-    def __str__(self) -> str:
-        return "(!!TENSOR EXPR NODE TYPE!!)"
+class TensorExpr(Node, abc.ABC):
 
-    def __getitem__(self, indices: List[Index]):
+    def __getitem__(self, indices: Iterable[Index]):
         if not isinstance(indices, collections.abc.Iterable):
             indices = (indices,)
         return IndexedTensor(self, indices)
 
 
-class ScalarExpr(astNode):
+class ScalarExpr(Node, abc.ABC):
+    def forall(self, *indices: Index) -> "deIndex":
+        return deIndex(self, indices)
+
     def __str__(self) -> str:
         return "(!!Scalar Expr NODE TYPE!!)"
-
-    def __or__(self, indices: List[Index]) -> "deIndex":
-        return deIndex(self, indices)
 
     def __mul__(self, other: "ScalarExpr") -> "ScalarExpr":
         return MulBinOp(self, other)
@@ -91,10 +91,10 @@ class Literal(ScalarExpr):
 @dataclass
 class IndexedTensor(ScalarExpr):
     tensor: TensorExpr
-    indices: List[Index]
+    indices: Iterable[Index]
 
     @property
-    def operands(self) -> Iterable[astNode]:
+    def operands(self) -> Iterable[Node]:
         return self.tensor, *self.indices
 
     def __str__(self) -> str:
@@ -106,7 +106,7 @@ class BinOp(ScalarExpr, abc.ABC):
     lhs: IndexedTensor
     rhs: IndexedTensor
 
-    def operands(self) -> Iterable[astNode]:
+    def operands(self) -> Iterable[Node]:
         return self.lhs, self.rhs
 
     def __str__(self) -> str:
@@ -130,13 +130,12 @@ class UnaryOp(ScalarExpr):
         return f"{self.name}({self.tensor})"
 
 
-@dataclass
 class Abs(UnaryOp):
     name = "abs"
 
 
 @dataclass
-class indexSum(ScalarExpr):
+class IndexSum(ScalarExpr):
     sub: ScalarExpr
     indices: Iterable[Index]
 
@@ -147,6 +146,7 @@ class indexSum(ScalarExpr):
 @dataclass
 class TensorVariable(TensorExpr, Terminal):
     name: str
+    space: TensorSpace
 
     def __str__(self) -> str:
         return self.name
@@ -158,7 +158,7 @@ class deIndex(TensorExpr):
     indices: List[Index]
 
     @property
-    def operands(self) -> Iterable[astNode]:
+    def operands(self) -> Iterable[Node]:
         return self.tensor, *self.indices
 
     def __str__(self) -> str:
@@ -166,12 +166,12 @@ class deIndex(TensorExpr):
 
 
 @dataclass
-class Lambda(astNode):
+class Lambda(Node):
     vars: List[TensorVariable]
-    sub: astNode
+    sub: Node
 
     @property
-    def operands(self) -> Iterable[astNode]:
+    def operands(self) -> Iterable[Node]:
         return self.vars, self.sub
 
     def __str__(self) -> str:

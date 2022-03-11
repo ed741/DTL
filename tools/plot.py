@@ -14,9 +14,13 @@ def plot(node, dot):
 
 
 @plot.register
-def plot_node(node: astNode, dot):
+def plot_node(node: Node, dot):
     label = str(node)
     dot.node(label)
+
+    for o in node.operands:
+        dot.edge(label, plot(o, dot))
+
     return label
 
 
@@ -71,20 +75,27 @@ def plot_lambda(node: Lambda, dot):
     return label
 
 
-if __name__ == "__main__":
-    dot = graphviz.Digraph()
-    i = Index("i")
-    j = Index("j")
-    k = Index("k")
-    T1 = Lambda([A := TensorVariable("A")], deIndex(A[j, i], [i, j]))
-    T2 = Lambda(
-        [A := TensorVariable("A"), B := TensorVariable("B")],
-        (A[j, i] * Abs(B[j, i]) | [i, j])[k] | [k],
-    )
-    # A = TensorVariable("A")
-    # B = TensorVariable("B")
-    # T2 = Lambda([A, B], A[k] | [k])
-    plot(T2, dot)
+def visualize_dag(expr):
+    dag = graphviz.Digraph()
+    plot(expr, dag)
+    return dag
 
-    print(dot.source)
-    dot.render("plot.gv", view=True)
+
+
+# if __name__ == "__main__":
+#     dot = graphviz.Digraph()
+#     i = Index("i")
+#     j = Index("j")
+#     k = Index("k")
+#     expr = Lambda(
+#         [A := TensorVariable("A"), B := TensorVariable("B")],
+#         (A[j, i] * Abs(B[j, i]) | [i, j])[k] | [k],
+#     )
+#
+#     matmul = Lambda(
+#         [A := TensorVariable("A")
+#
+#     plot(T2, dot)
+#
+#     print(dot.source)
+#     dot.render("plot.gv", view=True)

@@ -1,3 +1,4 @@
+import abc
 import collections
 from dataclasses import dataclass
 from typing import List
@@ -9,9 +10,11 @@ class VSpace():
     def __str__(self) -> str:
         return "(!!VSPACE!!)"
 
+
 @dataclass
-class RVSpace():
-    dim : int
+class RVSpace:
+    dim: int
+
     def __str__(self) -> str:
         return f"R{self.dim}"
 
@@ -74,18 +77,35 @@ class IndexedTensor(ScalarExpr):
     def __str__(self) -> str:
         return f"{self.tensor}[{','.join(map(str, self.indices))}]"
 
-@dataclass
-class MulBinOp(ScalarExpr):
-    lhs : IndexedTensor
-    rhs : IndexedTensor
-    def __str__(self) -> str:
-        return f"{self.lhs} * {self.rhs}"
 
 @dataclass
-class Abs(ScalarExpr):
-    sub : ScalarExpr
+class BinOp(ScalarExpr, abc.ABC):
+    lhs: IndexedTensor
+    rhs: IndexedTensor
+
     def __str__(self) -> str:
-        return f"abs({self.sub})"
+        return f"{self.lhs} {self.symbol} {self.rhs}"
+
+
+@dataclass
+class MulBinOp(BinOp):
+    symbol = "*"
+
+
+@dataclass
+class UnaryOp(ScalarExpr):
+    tensor: IndexedTensor
+
+    @property
+    def operands(self):
+        return self.tensor,
+
+    def __str__(self) -> str:
+        return f"{self.name}({self.tensor})"
+
+@dataclass
+class Abs(UnaryOp):
+    name = "abs"
 
 @dataclass
 class indexSum(ScalarExpr):
@@ -109,10 +129,11 @@ class deIndex(TensorExpr):
 
 @dataclass()
 class Lambda(astNode):
-    vars : List[TensorVariable]
-    sub : astNode
+    vars: List[TensorVariable]
+    sub: astNode
+
     def __str__(self) -> str:
-        return f"{type(self).__name__}({','.join(map(str, self.vars))}):{self.sub}"
+        return f"λ{','.join([str(v) for v in self.vars])}.{self.sub}"
 
 if __name__ == '__main__':
     i = Index("i")

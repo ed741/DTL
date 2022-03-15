@@ -5,7 +5,7 @@ import graphviz
 
 # from dtl.ast import (Abs, astNode, TensorExpr, IndexedTensor, Literal, Lambda, Index,
 #                      TensorVariable, deIndex)
-from dtl.ast import *
+from dtl.dag import *
 
 
 @functools.singledispatch

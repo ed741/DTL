@@ -143,7 +143,6 @@ class indexSum(ScalarExpr):
     def __str__(self) -> str:
         return f"Sum{self.indices}){self.sub})"
 
-
 @dataclass
 class TensorVariable(TensorExpr, Terminal):
     name: str

@@ -66,6 +66,7 @@ class TensorExpr(Node, abc.ABC):
     def __getitem__(self, indices: Iterable[Index]):
         if not isinstance(indices, collections.abc.Iterable):
             indices = (indices,)
+        indices = [i for i in indices]
         return IndexedTensor(self, indices)
 
 
@@ -153,21 +154,21 @@ class TensorVariable(TensorExpr, Terminal):
 
 @dataclass
 class deIndex(TensorExpr):
-    tensor: ScalarExpr
+    scalar_expr: ScalarExpr
     indices: List[Index]
 
     @property
     def operands(self) -> Iterable[Node]:
-        return self.tensor, *self.indices
+        return self.scalar_expr, *self.indices
 
     def __str__(self) -> str:
-        return f"({self.tensor})|{','.join(map(str, self.indices))}|"
+        return f"({self.scalar_expr})|{','.join(map(str, self.indices))}|"
 
 
 @dataclass
 class Lambda(Node):
     vars: List[TensorVariable]
-    sub: Node
+    sub: TensorExpr
 
     @property
     def operands(self) -> Iterable[Node]:
@@ -181,11 +182,11 @@ if __name__ == "__main__":
     i = Index("i")
     j = Index("j")
     k = Index("k")
-    T1 = Lambda([A := TensorVariable("A")], deIndex(A[j, i], [i, j]))
+    T1 = Lambda([A := TensorVariable("A", None)], deIndex(A[j, i], [i, j]))
     # T2 = Lambda([A := TensorVariable("A"),B := TensorVariable("B")], (A[j, i]*Abs(B[j,i])|[i, j])[k]|[k])
-    A = TensorVariable("A")
-    B = TensorVariable("B")
-    T2 = Lambda([A, B], A[k] | [k])
+    A = TensorVariable("A", None)
+    B = TensorVariable("B", None)
+    T2 = Lambda([A, B], A[k].forall(k))
     print(str([j, i]))
     # print(str(T1))
     print(str(T2))

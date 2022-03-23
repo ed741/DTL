@@ -1,1 +1,1 @@
-from dtl.ast import *
+from dtl.dag import *

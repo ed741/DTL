@@ -43,7 +43,7 @@ def plot_deindex(node: deIndex, dot: Any):
     label = str(node)
     dot.node(label)
 
-    dot.edge(label, plot(node.tensor, dot))
+    dot.edge(label, plot(node.scalar_expr, dot))
     for i in node.indices:
         dot.edge(label, plot(i, dot))
     return label
@@ -82,20 +82,20 @@ def visualize_dag(expr):
 
 
 
-# if __name__ == "__main__":
-#     dot = graphviz.Digraph()
-#     i = Index("i")
-#     j = Index("j")
-#     k = Index("k")
-#     expr = Lambda(
-#         [A := TensorVariable("A"), B := TensorVariable("B")],
-#         (A[j, i] * Abs(B[j, i]) | [i, j])[k] | [k],
-#     )
-#
-#     matmul = Lambda(
-#         [A := TensorVariable("A")
-#
-#     plot(T2, dot)
-#
-#     print(dot.source)
-#     dot.render("plot.gv", view=True)
+if __name__ == "__main__":
+    dot = graphviz.Digraph()
+    i = Index("i")
+    j = Index("j")
+    k = Index("k")
+    expr = Lambda(
+        [A := TensorVariable("A", None), B := TensorVariable("B",None)],
+        ((A[j, i] * Abs(B[j, i])) .forall(i, j))[k].forall(k),
+    )
+    #
+    # matmul = Lambda(
+    #     [A := TensorVariable("A", None)], None)
+
+    plot(expr, dot)
+
+    print(dot.source)
+    dot.render("plot.gv", view=True)

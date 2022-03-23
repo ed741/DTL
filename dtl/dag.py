@@ -62,7 +62,6 @@ class IntIndex(Index):
 
 
 class TensorExpr(Node, abc.ABC):
-
     def __getitem__(self, indices: Iterable[Index]):
         if not isinstance(indices, collections.abc.Iterable):
             indices = (indices,)
@@ -91,7 +90,7 @@ class Literal(ScalarExpr):
 
 @dataclass
 class IndexedTensor(ScalarExpr):
-    tensor: TensorExpr
+    tensor_expr: TensorExpr
     indices: Iterable[Index]
 
     @property
@@ -114,9 +113,12 @@ class BinOp(ScalarExpr, abc.ABC):
         return f"{self.lhs} {self.symbol} {self.rhs}"
 
 
-@dataclass
 class MulBinOp(BinOp):
     symbol = "*"
+
+
+class AddBinOp(BinOp):
+    symbol = "+"
 
 
 @dataclass

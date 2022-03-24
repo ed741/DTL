@@ -1,10 +1,11 @@
 import abc
 import collections
+import collections.abc
 from dataclasses import dataclass
-from typing import List, Iterable
+from typing import List, Iterable, FrozenSet
 
 
-@dataclass
+@dataclass(frozen=True)
 class VectorSpace(abc.ABC):
     dim: int
 
@@ -37,15 +38,20 @@ class Terminal(Node):
     operands = ()
 
 
-@dataclass
+@dataclass(frozen=True)
 class Index(Terminal):
     name: str
+
+    # FIXME An index should just be a label and the vector space associated with
+    # it should be derived from the tensor expression rather than what we do here
+    # and directly associate the index with the space.
+    space: VectorSpace
 
     def __str__(self) -> str:
         return self.name
 
 
-@dataclass
+@dataclass(frozen=True)
 class VarIndex(Index):
     var: str
 
@@ -53,7 +59,7 @@ class VarIndex(Index):
         return self.var
 
 
-@dataclass
+@dataclass(frozen=True)
 class IntIndex(Index):
     i: int
 
@@ -70,11 +76,17 @@ class TensorExpr(Node, abc.ABC):
 
 
 class ScalarExpr(Node, abc.ABC):
+
+    @property
+    @abc.abstractmethod
+    def indices(self) -> Iterable[Index]:
+        pass
+
     def forall(self, *indices: Index) -> "deIndex":
         return deIndex(self, indices)
 
-    def __str__(self) -> str:
-        return "(!!Scalar Expr NODE TYPE!!)"
+    def __add__(self, other: "ScalarExpr") -> "ScalarExpr":
+        return AddBinOp(self, other)
 
     def __mul__(self, other: "ScalarExpr") -> "ScalarExpr":
         return MulBinOp(self, other)
@@ -84,6 +96,8 @@ class ScalarExpr(Node, abc.ABC):
 class Literal(ScalarExpr):
     f: float
 
+    indices = ()
+
     def __str__(self) -> str:
         return str(self.f)
 
@@ -91,7 +105,11 @@ class Literal(ScalarExpr):
 @dataclass
 class IndexedTensor(ScalarExpr):
     tensor_expr: TensorExpr
-    indices: Iterable[Index]
+    _indices: collections.abc.Sequence[Index]
+
+    @property
+    def indices(self):
+        return self._indices
 
     @property
     def operands(self) -> Iterable[Node]:
@@ -105,6 +123,13 @@ class IndexedTensor(ScalarExpr):
 class BinOp(ScalarExpr, abc.ABC):
     lhs: IndexedTensor
     rhs: IndexedTensor
+
+    @property
+    def indices(self) -> FrozenSet[Index]:
+        # binops store their indices in a set rather than a tuple because
+        # the ordering of the indices is only determined by a surrounding
+        # unindex node.
+        return frozenset(self.lhs.indices) | frozenset(self.rhs.indices)
 
     def operands(self) -> Iterable[Node]:
         return self.lhs, self.rhs
@@ -145,6 +170,7 @@ class IndexSum(ScalarExpr):
     def __str__(self) -> str:
         return f"Sum{self.indices}){self.sub})"
 
+
 @dataclass
 class TensorVariable(TensorExpr, Terminal):
     name: str
@@ -178,17 +204,3 @@ class Lambda(Node):
 
     def __str__(self) -> str:
         return f"λ{','.join([str(v) for v in self.vars])}.{self.sub}"
-
-
-if __name__ == "__main__":
-    i = Index("i")
-    j = Index("j")
-    k = Index("k")
-    T1 = Lambda([A := TensorVariable("A", None)], deIndex(A[j, i], [i, j]))
-    # T2 = Lambda([A := TensorVariable("A"),B := TensorVariable("B")], (A[j, i]*Abs(B[j,i])|[i, j])[k]|[k])
-    A = TensorVariable("A", None)
-    B = TensorVariable("B", None)
-    T2 = Lambda([A, B], A[k].forall(k))
-    print(str([j, i]))
-    # print(str(T1))
-    print(str(T2))

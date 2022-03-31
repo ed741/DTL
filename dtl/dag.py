@@ -18,10 +18,6 @@ class VectorSpace(abc.ABC):
         return f"{self.symbol}{self.dim}"
 
 
-class RealVectorSpace(VectorSpace):
-    symbol = "R"
-
-
 @dataclass
 class TensorSpace:
     spaces: Iterable[VectorSpace]

@@ -51,21 +51,20 @@ class Index(Terminal):
         return self.name
 
 
-@dataclass(frozen=True)
-class VarIndex(Index):
-    var: str
+def indices(*names: str):
+    """Return a tuple of `Index` instances with given names.
 
-    def __str__(self) -> str:
-        return self.var
+    Parameters
+    ----------
+    *names
+        Iterable of names to give the new indices.
 
-
-@dataclass(frozen=True)
-class IntIndex(Index):
-    i: int
-
-    def __str__(self) -> str:
-        return str(self.i)
-
+    Returns
+    -------
+    tuple
+        The new `Index` objects.
+    """
+    return tuple(Index(name) for name in names)
 
 class TensorExpr(Node, abc.ABC):
     def __getitem__(self, indices: Iterable[Index]):

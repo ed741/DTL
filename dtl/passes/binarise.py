@@ -7,13 +7,16 @@ from dtl.dag import *
 def binarise(node: Node):
     raise AssertionError
 
+
 @binarise.Lambda
 def binarise_Lambda(node: Lambda):
     return binarise(node.sub)
 
+
 @binarise.deIndex
 def binarise_deIndex(node: deIndex):
     return binarise(node.scalar_expr)
+
 
 """ When we have ] A[i,j,k] * B[j,k,l] * C[k,q] [i,l,q
     we must insert a deindex-reindex pair over A[..] * B[..]

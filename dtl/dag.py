@@ -2,7 +2,8 @@ import abc
 import collections
 import collections.abc
 from dataclasses import dataclass
-from typing import List, Iterable, FrozenSet
+import numbers
+from typing import List, Iterable, FrozenSet, Union
 
 
 @dataclass(frozen=True)
@@ -17,10 +18,29 @@ class VectorSpace(abc.ABC):
     def __str__(self) -> str:
         return f"{self.symbol}{self.dim}"
 
+    def __mul__(self, other):
+        if isinstance(other, VectorSpace):
+            return TensorSpace(self, other)
+        else:
+            return NotImplemented
 
-@dataclass
+    def __pow__(self, other):
+        if isinstance(other, numbers.Integral):
+            return TensorSpace([self] * other)
+        else:
+            return NotImplemented
+
+
+@dataclass(frozen=True)
 class TensorSpace:
     spaces: Iterable[VectorSpace]
+
+    def __iter__(self):
+        return iter(self.spaces)
+
+    @property
+    def shape(self):
+        return tuple(space.dim for space in self.spaces)
 
 
 class Node(abc.ABC):
@@ -37,11 +57,6 @@ class Terminal(Node):
 @dataclass(frozen=True)
 class Index(Terminal):
     name: str
-
-    # FIXME An index should just be a label and the vector space associated with
-    # it should be derived from the tensor expression rather than what we do here
-    # and directly associate the index with the space.
-    space: VectorSpace
 
     def __str__(self) -> str:
         return self.name
@@ -62,7 +77,13 @@ def indices(*names: str):
     """
     return tuple(Index(name) for name in names)
 
+
 class TensorExpr(Node, abc.ABC):
+    @property
+    @abc.abstractmethod
+    def space(self):
+        """The `TensorSpace` of the expression."""
+
     def __getitem__(self, indices: Iterable[Index]):
         if not isinstance(indices, collections.abc.Iterable):
             indices = (indices,)
@@ -71,7 +92,6 @@ class TensorExpr(Node, abc.ABC):
 
 
 class ScalarExpr(Node, abc.ABC):
-
     @property
     @abc.abstractmethod
     def indices(self) -> Iterable[Index]:
@@ -79,6 +99,14 @@ class ScalarExpr(Node, abc.ABC):
 
     def forall(self, *indices: Index) -> "deIndex":
         return deIndex(self, indices)
+
+    @property
+    @abc.abstractmethod
+    def index_spaces(self):
+        """Return a dict containing the expression indices
+        coupled with their spaces.
+        """
+        pass
 
     def __add__(self, other: "ScalarExpr") -> "ScalarExpr":
         return AddBinOp(self, other)
@@ -92,6 +120,10 @@ class Literal(ScalarExpr):
     f: float
 
     indices = ()
+
+    @property
+    def index_spaces(self):
+        return {}
 
     def __str__(self) -> str:
         return str(self.f)
@@ -107,6 +139,10 @@ class IndexedTensor(ScalarExpr):
         return self._indices
 
     @property
+    def index_spaces(self):
+        return dict(zip(self._indices, self.tensor_expr.space))
+
+    @property
     def operands(self) -> Iterable[Node]:
         return self.tensor, *self.indices
 
@@ -116,8 +152,18 @@ class IndexedTensor(ScalarExpr):
 
 @dataclass
 class BinOp(ScalarExpr, abc.ABC):
-    lhs: IndexedTensor
-    rhs: IndexedTensor
+    def __init__(self, lhs: IndexedTensor, rhs: IndexedTensor):
+        # check that common indices share the same space
+        if any(
+            lhs.index_spaces[idx] != rhs.index_spaces[idx]
+            for idx in set(lhs.indices) & set(rhs.indices)
+        ):
+            raise ValueError(
+                "Indices common across subexpressions must act over the same space"
+            )
+
+        self.lhs = lhs
+        self.rhs = rhs
 
     @property
     def indices(self) -> FrozenSet[Index]:
@@ -125,6 +171,10 @@ class BinOp(ScalarExpr, abc.ABC):
         # the ordering of the indices is only determined by a surrounding
         # unindex node.
         return frozenset(self.lhs.indices) | frozenset(self.rhs.indices)
+
+    @property
+    def index_spaces(self):
+        return {**self.lhs.index_spaces, **self.rhs.index_spaces}
 
     def operands(self) -> Iterable[Node]:
         return self.lhs, self.rhs
@@ -168,8 +218,16 @@ class IndexSum(ScalarExpr):
 
 @dataclass
 class TensorVariable(TensorExpr, Terminal):
-    name: str
-    space: TensorSpace
+    def __init__(self, space: Union[VectorSpace, TensorSpace], name: str):
+        if isinstance(space, VectorSpace):
+            space = TensorSpace([space])
+
+        self._space = space
+        self.name = name
+
+    @property
+    def space(self):
+        return self._space
 
     def __str__(self) -> str:
         return self.name
@@ -179,6 +237,14 @@ class TensorVariable(TensorExpr, Terminal):
 class deIndex(TensorExpr):
     scalar_expr: ScalarExpr
     indices: List[Index]
+
+    @property
+    def space(self):
+        return TensorSpace(self.index_spaces.values())
+
+    @property
+    def index_spaces(self):
+        return {idx: self.scalar_expr.index_spaces[idx] for idx in self.indices}
 
     @property
     def operands(self) -> Iterable[Node]:

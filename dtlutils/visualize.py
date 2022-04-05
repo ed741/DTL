@@ -81,15 +81,14 @@ def visualize_dag(expr):
     return dag
 
 
-
 if __name__ == "__main__":
     dot = graphviz.Digraph()
     i = Index("i")
     j = Index("j")
     k = Index("k")
     expr = Lambda(
-        [A := TensorVariable("A", None), B := TensorVariable("B",None)],
-        ((A[j, i] * Abs(B[j, i])) .forall(i, j))[k].forall(k),
+        [A := TensorVariable("A", None), B := TensorVariable("B", None)],
+        ((A[j, i] * Abs(B[j, i])).forall(i, j))[k].forall(k),
     )
     #
     # matmul = Lambda(

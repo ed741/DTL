@@ -31,16 +31,30 @@ class VectorSpace(abc.ABC):
             return NotImplemented
 
 
-@dataclass(frozen=True)
 class TensorSpace:
-    spaces: Iterable[VectorSpace]
+
+    def __init__(self, spaces: Iterable[VectorSpace]):
+        self.spaces = tuple(spaces)
 
     def __iter__(self):
         return iter(self.spaces)
 
+    def __hash__(self):
+        return hash(self._hashkey)
+
+    def __eq__(self, other):
+        if isinstance(other, TensorSpace):
+            return self._hashkey == other._hashkey
+        else:
+            return NotImplemented
+
     @property
     def shape(self):
         return tuple(space.dim for space in self.spaces)
+
+    @property
+    def _hashkey(self):
+        return (self.spaces,)
 
 
 class Node(abc.ABC):
@@ -216,18 +230,29 @@ class IndexSum(ScalarExpr):
         return f"Sum{self.indices}){self.sub})"
 
 
-@dataclass
 class TensorVariable(TensorExpr, Terminal):
+
     def __init__(self, space: Union[VectorSpace, TensorSpace], name: str):
         if isinstance(space, VectorSpace):
-            space = TensorSpace([space])
+            space = TensorSpace((space,))
 
         self._space = space
         self.name = name
 
+        self._key = space, name
+
     @property
     def space(self):
         return self._space
+
+    def __hash__(self):
+        return hash(self._key)
+
+    def __eq__(self, other):
+        if isinstance(other, TensorVariable):
+            return self._key == other._key
+        else:
+            return NotImplemented
 
     def __str__(self) -> str:
         return self.name

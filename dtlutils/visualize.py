@@ -1,4 +1,5 @@
 import functools
+import typing
 from typing import Any
 
 import graphviz
@@ -21,13 +22,20 @@ def plot_dag(expr: dtl.Node, *, name="expression", view=False, **kwargs):
         Extra keyword arguments passed to the `graphviz.Digraph` constructor.
     """
     dag = graphviz.Digraph(name, **kwargs)
-    _plot_dag(expr, dag)
+    seen = set()
+    _plot_dag(expr, dag, seen)
     dag.render(quiet_view=view)
 
 
-def _plot_dag(expr: dtl.Node, dag: graphviz.Digraph):
+def _plot_dag(expr: dtl.Node, dag: graphviz.Digraph, seen: typing.Set[str]):
+    name = str(id(expr))
+    if name in seen:
+        return name
+    else:
+        seen.add(name)
     label = str(expr)
-    dag.node(label)
+    dag.node(name, label=label)
     for o in expr.operands:
-        dag.edge(label, _plot_dag(o, dag))
-    return label
+        dag.edge(name, _plot_dag(o, dag, seen))
+    return name
+

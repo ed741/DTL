@@ -7,7 +7,7 @@ import graphviz
 import dtl
 
 
-def plot_dag(expr: dtl.Node, *, name="expression", view=False, **kwargs):
+def plot_dag(expr: dtl.Node, *, name="expression", view=False, coalesce_duplicates=True, **kwargs):
     """Render loop expression as a DAG and write to a file.
 
     Parameters
@@ -22,20 +22,20 @@ def plot_dag(expr: dtl.Node, *, name="expression", view=False, **kwargs):
         Extra keyword arguments passed to the `graphviz.Digraph` constructor.
     """
     dag = graphviz.Digraph(name, **kwargs)
-    seen = set()
-    _plot_dag(expr, dag, seen)
+    seen = {}
+    _plot_dag(expr, dag, seen, coalesce_duplicates=coalesce_duplicates)
     dag.render(quiet_view=view)
 
 
-def _plot_dag(expr: dtl.Node, dag: graphviz.Digraph, seen: typing.Set[str]):
+def _plot_dag(expr: dtl.Node, dag: graphviz.Digraph, seen: typing.Dict, coalesce_duplicates=True):
+    if coalesce_duplicates and expr in seen:
+        return seen[expr]
+    
     name = str(id(expr))
-    if name in seen:
-        return name
-    else:
-        seen.add(name)
+    seen[expr] = name
     label = str(expr)
     dag.node(name, label=label)
     for o in expr.operands:
-        dag.edge(name, _plot_dag(o, dag, seen))
+        dag.edge(name, _plot_dag(o, dag, seen, coalesce_duplicates=coalesce_duplicates))
     return name
 

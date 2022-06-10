@@ -1,7 +1,8 @@
 from dtl import *
 from dtlutils import visualize
-    
-    
+from dtlutils.traversal import postOrder
+
+
 def func1():
     ii, i = Index("i"), Index("i")
     j = Index("j")
@@ -50,15 +51,67 @@ def mttkrp():
     k = Index("k")
     l = Index("l")
     
-    mttkrp_expr = Lambda([TB:=(vsI*vsK*vsL).new("TB"), TC:= (vsL*vsJ).new("TC"), TD:= (vsK*vsJ).new("TD")], (TB[i,k,l]*TC[l,j]*TD[k,j]).forall(i,j))
+    mttkrp_expr = Lambda([TB:=(vsI*vsK*vsL).new("TB"), TC:= (vsL*vsJ).new("TC"), TD:= (vsK*vsJ).new("TD")],
+                         (TB[i,k,l]*TC[l,j]*TD[k,j]).forall(i,j))
     visualize.plot_dag(mttkrp_expr, view=True, coalesce_duplicates=True)
-    
-    
-def postOrder(node: Node, fn):
-    operands = node.operands
-    new_operands = [postOrder(n, fn) for n in operands]
-    return fn(node.with_operands(new_operands))
+    visualize.plot_network(mttkrp_expr, view=True)
 
+
+def tucker():
+    vsI = UnknownSizeVectorSpace("I")
+    vsJ = UnknownSizeVectorSpace("J")
+    vsK = UnknownSizeVectorSpace("K")
+    vsP = UnknownSizeVectorSpace("P")
+    vsQ = UnknownSizeVectorSpace("Q")
+    vsR = UnknownSizeVectorSpace("R")
+    i = Index("i")
+    j = Index("j")
+    k = Index("k")
+    p = Index("p")
+    q = Index("q")
+    r = Index("r")
+    
+    mttkrp_expr = Lambda([TG := (vsP * vsQ * vsR).new("TG"), TA := (vsI * vsP).new("TA"), TB := (vsJ * vsQ).new("TB"), TC := (vsK * vsR).new("TC")],
+                         (TG[p, q, r] * TA[i, p] * TB[j, q] * TC[k, r]).forall(i, j, k))
+    visualize.plot_dag(mttkrp_expr, view=True, coalesce_duplicates=True)
+    visualize.plot_network(mttkrp_expr, view=True)
+
+
+def func2():
+    vsI = UnknownSizeVectorSpace("I")
+    vsJ = UnknownSizeVectorSpace("J")
+    vsK = UnknownSizeVectorSpace("K")
+    # vsL = UnknownSizeVectorSpace("L")
+    i = Index("i")
+    j = Index("j")
+    k = Index("k")
+    
+    l = Index("l")
+    
+    expr = Lambda([TA := (vsI * vsJ * vsK).new("TA"), TB := (vsI * vsJ).new("TB"), TC := (vsK * vsJ).new("TC")],
+                         ((TA[i, j, k] * TB[i, j] * TC[k, j]).forall(i, j)[l].forall(l)[i] * TA[i,j,k]).forall(j,k))
+    # visualize.plot_dag(expr, view=True, coalesce_duplicates=True)
+    visualize.plot_network(expr, view=True)
+
+
+def func3():
+    vsI = UnknownSizeVectorSpace("I")
+    vsJ = UnknownSizeVectorSpace("J")
+    # vsK = UnknownSizeVectorSpace("K")
+    # vsL = UnknownSizeVectorSpace("L")
+    i = Index("i")
+    j = Index("j")
+    k = Index("k")
+    
+    l = Index("l")
+    
+    expr = Lambda([TA := (vsI * vsJ * vsJ).new("TA"), TB := (vsI * vsJ * vsJ).new("TB"), TC := (vsJ * vsJ).new("TC")],
+                  ((TA[i, j, k] * TA[i, k, j] * TC[k, j]).forall(i, j)[l].forall(l)[i] * TA[i, j, k]).forall(j, k))
+    visualize.plot_dag(expr, view=True, coalesce_duplicates=True)
+    visualize.plot_network(expr, view=True)
 
 # func1()
-mttkrp()
+# mttkrp()
+# tucker()
+func2()
+# func3()

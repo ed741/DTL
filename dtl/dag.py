@@ -3,7 +3,7 @@ import collections
 import collections.abc
 import typing
 import numbers
-from typing import List, Iterable, FrozenSet, Union, Dict, Any, Tuple
+from typing import List, Iterable, FrozenSet, Union, Dict, Any
 from inspect import currentframe, getframeinfo
 
 import pytools

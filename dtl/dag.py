@@ -60,6 +60,9 @@ class Node(pytools.ImmutableRecord, abc.ABC):
         d = {k: v for k, v in self.attrs}
         d.update(kwargs)
         return self.copy(attrs=d)
+    
+    def makes_scope(self, index):
+        return False
 
 
 class Terminal(Node, abc.ABC):
@@ -215,6 +218,9 @@ class ScalarExpr(Node, abc.ABC):
     def forall(self, *indices: Index) -> "deIndex":
         return deIndex(self, indices)
     
+    def sum(self, *indices: Index) -> "IndexSum":
+        return IndexSum(self, indices)
+    
     @property
     @abc.abstractmethod
     def index_spaces(self):
@@ -303,7 +309,7 @@ class BinOp(ScalarExpr, abc.ABC):
 
     @property
     def free_indices(self) -> Iterable[Index]:
-        return self.indices
+        return frozenset(self.lhs.free_indices) | frozenset(self.rhs.free_indices)
     
     @property
     def index_spaces(self):
@@ -349,11 +355,11 @@ class UnaryOp(ScalarExpr, abc.ABC):
     
     @property
     def indices(self) -> Iterable[Index]:
-        return self.tensor.indices
+        return self.scalar_expr.indices
 
     @property
     def free_indices(self) -> Iterable[Index]:
-        return self.indices
+        return self.scalar_expr.free_indices
     
     @property
     def index_spaces(self):
@@ -383,7 +389,7 @@ class IndexSum(ScalarExpr):
 
     @property
     def free_indices(self) -> Iterable[Index]:
-        return frozenset(self.indices) - frozenset(self.sum_indices)
+        return frozenset(self.scalar_expr.free_indices) - frozenset(self.sum_indices)
     
     @property
     def index_spaces(self):
@@ -403,6 +409,9 @@ class IndexSum(ScalarExpr):
     
     def __str__(self) -> str:
         return f"Sum[{','.join(map(str, self.sum_indices))}]({self.scalar_expr})"
+    
+    def makes_scope(self, index):
+        return index in self.sum_indices
 
 
 class TensorVariable(TensorExpr):
@@ -475,7 +484,9 @@ class deIndex(TensorExpr):
     
     def __str__(self) -> str:
         return f"({self.scalar_expr})|{','.join(map(str, self.indices))}|"
-
+    
+    def makes_scope(self, index):
+        return index in self.indices
 
 class Lambda(Node):
     fields = Node.fields | {"vars", "tensor_expr"}

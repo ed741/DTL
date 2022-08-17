@@ -1,5 +1,8 @@
+import math
+
 from dtl import *
 from dtlutils import visualize
+from dtlutils.names import make_Index_names_unique
 from dtlutils.traversal import postOrder
 
 
@@ -107,11 +110,14 @@ def func3():
     
     expr = Lambda([TA := (vsI * vsJ * vsJ).new("TA"), TB := (vsI * vsJ * vsJ).new("TB"), TC := (vsJ * vsJ).new("TC")],
                   ((TA[i, j, k] * TA[i, k, j] * TC[k, j]).forall(i, j)[l].forall(l)[i] * TA[i, j, k]).forall(j, k))
-    visualize.plot_dag(expr, view=True, coalesce_duplicates=True)
-    visualize.plot_network(expr, view=True)
+    expr2 = make_Index_names_unique(expr)
+    visualize.plot_dag(expr2, view=True, coalesce_duplicates=True)
+    # visualize.plot_network(expr.tensor_expr.scalar_expr.scalar_expr.lhs.tensor_expr, view=True)
+    # visualize.plot_network(expr.tensor_expr, view=True)
 
 # func1()
 # mttkrp()
 # tucker()
-func2()
-# func3()
+# func2()
+func3()
+

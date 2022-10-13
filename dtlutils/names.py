@@ -1,7 +1,7 @@
 import itertools
 
 from dtl import Node, Index
-from dtlutils.traversal import postOrderRoute, get_scope, node_from_path
+from dtlutils.traversal import postOrderRoute, get_scope, node_from_path, prepostOrderRoute
 
 
 class NameGenerator:
@@ -24,6 +24,7 @@ def make_Index_names_unique(root: Node):
     names = set()
     new_index_node_map = {}
     name_count = 0
+    seen_nodes = {}
     
     def _get_new_name(old_name):
         i = 0
@@ -32,7 +33,12 @@ def make_Index_names_unique(root: Node):
         names.add(name)
         return name
     
-    def _make_Index_names_unique(node, path):
+    def _make_Index_name_unique_pre_fun(node, path):
+        return None
+    
+    def _make_Index_names_unique(node, pre_fun_result, path):
+        # if node in seen_nodes:
+        #     return seen_nodes[node]
         if isinstance(node, Index):
             scopePath = tuple(get_scope(root, node, path))
             if scopePath is None:
@@ -44,7 +50,9 @@ def make_Index_names_unique(root: Node):
                 name = _get_new_name(node.name)
                 newNode = node.copy(name=name)
                 new_index_node_map[(scopePath, node)] = newNode
+                seen_nodes[node] = newNode
                 return newNode
+        seen_nodes[node] = node
         return node
-    return postOrderRoute(root, _make_Index_names_unique)
+    return prepostOrderRoute(root, _make_Index_name_unique_pre_fun, _make_Index_names_unique)
     

@@ -30,7 +30,7 @@ class KernelBuilder:
         self.domains = []
         self.instructions = []
         self.kernel_data = []
-        self.registered_tensor_variables = set()
+        self.registered_tensor_variables = {}
         #self._namer = 
 
     def build(self):
@@ -75,25 +75,38 @@ class KernelBuilder:
     
     @_get_expression.register
     def _(self, expr: dtl.IndexSum):
-        return f"sum({','.join(idx.name for idx in expr.sum_indices)}, {self._get_expression(expr.scalar_expr)})"
+        inames = tuple(pym.var(idx.name) for idx in expr.sum_indices)
+        # return f"sum({','.join(idx.name for idx in expr.sum_indices)}, {self._get_expression(expr.scalar_expr)})"
+        return lp.Reduction(lp.library.reduction.SumReductionOperation(), inames, self._get_expression(expr.scalar_expr))
+        # return lp.Reduction("sum", inames, self._get_expression(expr.scalar_expr))
 
     @_get_expression.register
     def _(self, expr: dtl.MulBinOp):
-        return f"({self._get_expression(expr.lhs)} * {self._get_expression(expr.rhs)})"
-        # return self._get_expression(expr.lhs) * self._get_expression(expr.rhs)
+        # return f"({self._get_expression(expr.lhs)} * {self._get_expression(expr.rhs)})"
+        return self._get_expression(expr.lhs) * self._get_expression(expr.rhs)
 
     @_get_expression.register
     def _(self, expr: dtl.AddBinOp):
-        return f"({self._get_expression(expr.lhs)} + {self._get_expression(expr.rhs)})"
-        # return self._get_expression(expr.lhs) + self._get_expression(expr.rhs)
+        # return f"({self._get_expression(expr.lhs)} + {self._get_expression(expr.rhs)})"
+        return self._get_expression(expr.lhs) + self._get_expression(expr.rhs)
 
     @_get_expression.register
     def _(self, expr: dtl.IndexedTensor):
-        if not isinstance(expr.tensor_expr, dtl.TensorVariable):
-            raise NotImplementedError
-        return f"({expr.tensor_expr.name}[{','.join(idx.name for idx in expr.tensor_indices)}])"
-        # return pym.subscript(pym.var(expr.tensor_expr.name), tuple(pym.var(idx.name) for idx in expr.tensor_indices))
+        # if not isinstance(expr.tensor_expr, dtl.TensorVariable):
+        #     raise NotImplementedError
+        # return f"({self._get_expression(expr.tensor_expr)}[{','.join(idx.name for idx in expr.tensor_indices)}])"
+        return pym.subscript(self._get_expression(expr.tensor_expr), tuple(pym.var(idx.name) for idx in expr.tensor_indices))
 
+    @_get_expression.register
+    def _(self, expr: dtl.TensorVariable):
+        return pym.var(expr.name)
+
+    @_get_expression.register
+    def _(self, expr: dtl.deIndex):
+        if expr in self.registered_tensor_variables:
+            return pym.var(self.registered_tensor_variables[expr])
+        else:
+            raise NotImplementedError
 
     @functools.singledispatchmethod
     def _collect_bits(self, expr, path, **kwargs):
@@ -102,73 +115,80 @@ class KernelBuilder:
 
     @_collect_bits.register
     def _(self, expr: dtl.deIndex, path, **kwargs):
-        print("build deIndex")
-        for index in (expr.indices):
-            iname = index_name(index, path)
-
-            if isinstance(expr.index_spaces[index], dtl.UnknownSizeVectorSpace):
-                raise NotImplementedError
-                
-            size = expr.index_spaces[index].dim #if isinstance(expr.tensor_spaces[index], RealVectorSpace)
-            # if small
-                # size = "5"
-            # else:
-                # param_name = "myuniqueparam"
-                # size = param_name
-                # param = lp.ValueArg(param_name, dtype=np.int32)
-                # self.kernel_data.append(param)
-
-            domain = f"{{ [{iname}]: 0 <= {iname} < {size} }}"
-            self.domains.append(domain)
-        inner_domains = self._get_domains(expr.scalar_expr)
-        self.domains.extend(inner_domains)
-
-        # A[i]
-        # deIndex_at_[0,0,1,2,3,0]
-        #tvar_name = pym.var(expr.name)
-        tvar_name = f"P_{'_'.join(path)}"
-        pymtvarname = pym.var(tvar_name)
-        # indices = tuple(pym.var(idx.name) for idx in expr.indices)
-        indices = tuple(pym.var(idx.name) for idx in expr.indices)  # (i, j)
-        assignee = pym.subscript(pymtvarname, indices) #A[i]
-        # assignee = "out[j_0, p_0]"
-
-        shape = tuple(expr.index_spaces[idx].dim for idx in expr.indices)
-        #temp = lp.TemporaryVariable(tvar_name, dtype=np.float64, shape=shape)
-        temp = lp.GlobalArg(tvar_name, dtype=np.float64, shape=shape)
-        self.kernel_data.append(temp)
-
-        # loopInames = (idx for idx, space in expr.index_spaces)
-        loop_inames = frozenset({idx.name for idx in expr.index_spaces.keys()})  # (i, j)indexed_tensor.tensor_  # {i, j}
-        expression = self._get_expression(expr.scalar_expr)
-        print(assignee)
-        print("=")
-        print(expression)
-        self._collect_bits(expr.scalar_expr, path+[path_id(expr, expr.scalar_expr)])
-        #maybe within_inames can be worked out from here, not passed back
-
-        #A[i] = A[i] + B[i,j]
-        insn = lp.Assignment(
-            assignee, expression,
-            depends_on=frozenset(),
-            within_inames=loop_inames,
-        )
-        self.instructions.append(insn)
+        tvar_name = f"P_{'_'.join(str(p) for p in path)}"
+        print(f"build deIndex: {tvar_name}")
+        if expr in self.registered_tensor_variables:
+            print(f"{tvar_name} already built as {self.registered_tensor_variables[expr]}")
+        else:
+            self.registered_tensor_variables[expr] = tvar_name
+            
+            self._collect_bits(expr.scalar_expr, path + [path_id(expr, expr.scalar_expr)])
+            
+            for index in (expr.indices):
+                iname = index.name
+                print(f"registering index: {iname}")
+                if isinstance(expr.index_spaces[index], dtl.UnknownSizeVectorSpace):
+                    raise NotImplementedError
+                    
+                size = expr.index_spaces[index].dim #if isinstance(expr.tensor_spaces[index], RealVectorSpace)
+                # if small
+                    # size = "5"
+                # else:
+                    # param_name = "myuniqueparam"
+                    # size = param_name
+                    # param = lp.ValueArg(param_name, dtype=np.int32)
+                    # self.kernel_data.append(param)
+    
+                domain = f"{{ [{iname}]: 0 <= {iname} < {size} }}"
+                self.domains.append(domain)
+            inner_domains = self._get_domains(expr.scalar_expr)
+            self.domains.extend(inner_domains)
+    
+            # A[i]
+            # deIndex_at_[0,0,1,2,3,0]
+            pymtvarname = pym.var(tvar_name)
+            # indices = tuple(pym.var(idx.name) for idx in expr.indices)
+            indices = tuple(pym.var(idx.name) for idx in expr.indices)  # (i, j)
+            assignee = pym.subscript(pymtvarname, indices) #A[i]
+            # assignee = "out[j_0, p_0]"
+    
+            shape = tuple(expr.index_spaces[idx].dim for idx in expr.indices)
+            #temp = lp.TemporaryVariable(tvar_name, dtype=np.float64, shape=shape)
+            temp = lp.GlobalArg(tvar_name, dtype=np.float64, shape=shape)
+            self.kernel_data.append(temp)
+    
+            # loopInames = (idx for idx, space in expr.index_spaces)
+            loop_inames = frozenset({idx.name for idx in expr.index_spaces.keys()})  # (i, j)indexed_tensor.tensor_  # {i, j}
+            expression = self._get_expression(expr.scalar_expr)
+            print(assignee)
+            print("=")
+            print(expression)
+            # self._collect_bits(expr.scalar_expr, path+[path_id(expr, expr.scalar_expr)])
+            #maybe within_inames can be worked out from here, not passed back
+    
+            #A[i] = A[i] + B[i,j]
+            insn = lp.Assignment(
+                assignee, expression,
+                depends_on=frozenset(),
+                within_inames=loop_inames,
+            )
+            self.instructions.append(insn)
 
 
     @_collect_bits.register
     def _(self, tensor_variable: dtl.TensorVariable, path, **kwargs):
+        tvar_name = tensor_variable.name
         if tensor_variable not in self.registered_tensor_variables:
-            self.registered_tensor_variables.add(tensor_variable)
+            self.registered_tensor_variables[tensor_variable] = tvar_name
             shape = []
             for v_space in tensor_variable.tensor_space.spaces:
                 if isinstance(v_space, dtl.UnknownSizeVectorSpace):
                     raise NotImplementedError
                 shape.append(v_space.dim)
             shape = tuple(shape)
-            tvar = lp.GlobalArg(tensor_variable.name, dtype=np.float64, shape=shape)
+            tvar = lp.GlobalArg(tvar_name, dtype=np.float64, shape=shape)
             self.kernel_data.append(tvar)
-    
+            
     # @_collect_bits.register
     # def _(self, index_sum: dtl.IndexSum, path, **kwargs):
     #     print("build IndexSum")
@@ -211,8 +231,4 @@ class KernelBuilder:
     #
     #     within_inames = frozenset({index_name(idx, get_scope(self._expr, idx, path)) for idx in indexed_tensor.tensor_indices})  # (i, j)indexed_tensor.tensor_  # {i, j}
     #     return expression, within_inames
-    
-def index_name(index, path):
-    name = f"{index.name}_{'_'.join(str(p) for p in path)}"
-    print(name)
-    return index.name
+

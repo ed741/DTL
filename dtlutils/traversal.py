@@ -14,6 +14,14 @@ def postOrderRoute(node: Node, fn, path=None):
     new_operands = [postOrderRoute(n, fn, path=(path+[i])) for i, n in enumerate(operands)]
     return fn(node.with_operands(new_operands), tuple(path))
 
+def prepostOrderRoute(node: Node, pre_fn, post_fn, path=None):
+    if path is None:
+        path = []
+    pre_fn_result = pre_fn(node, tuple(path))
+    operands = node.operands
+    new_operands = [prepostOrderRoute(n, pre_fn, post_fn, path=(path+[i])) for i, n in enumerate(operands)]
+    return post_fn(node.with_operands(new_operands), pre_fn_result, tuple(path))
+
 
 def forAll(node: Node, fn, seen=None):
     if seen is None:

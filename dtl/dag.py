@@ -278,9 +278,9 @@ class IndexedTensor(ScalarExpr):
     def with_operands(self, operands: List):
         return self.copy(tensor_expr=operands[0], tensor_indices=tuple(operands[1:]))
     
-    def postOrder(self, fn: typing.Callable):
-        return fn(self.copy(tensor_expr=self.tensor_expr.postOrder(fn)),
-                  tensor_indices=self.tensor_indices.postOrder(fn))
+    # def postOrder(self, fn: typing.Callable):
+    #     return fn(self.copy(tensor_expr=self.tensor_expr.postOrder(fn)),
+    #               tensor_indices=self.tensor_indices.postOrder(fn))
     
     def __str__(self) -> str:
         return f"{self.tensor_expr}[{','.join(map(str, self.indices))}]"
@@ -322,8 +322,8 @@ class BinOp(ScalarExpr, abc.ABC):
     def with_operands(self, operands: List):
         return self.copy(lhs=operands[0], rhs=operands[1])
     
-    def postOrder(self, fn: typing.Callable):
-        return fn(self.copy(lhs=self.lhs.postOrder(fn)), rhs=self.rhs.postOrder(fn))
+    # def postOrder(self, fn: typing.Callable):
+    #     return fn(self.copy(lhs=self.lhs.postOrder(fn)), rhs=self.rhs.postOrder(fn))
     
     def __str__(self) -> str:
         return f"{self.lhs} {self.symbol} {self.rhs}"
@@ -350,8 +350,8 @@ class UnaryOp(ScalarExpr, abc.ABC):
     def with_operands(self, operands: List):
         return self.copy(tensor=operands[0])
     
-    def postOrder(self, fn: typing.Callable):
-        return fn(self.copy(tensor=self.tensor.postOrder(fn)))
+    # def postOrder(self, fn: typing.Callable):
+    #     return fn(self.copy(tensor=self.tensor.postOrder(fn)))
     
     @property
     def indices(self) -> Iterable[Index]:
@@ -402,10 +402,10 @@ class IndexSum(ScalarExpr):
     def with_operands(self, operands: List):
         return self.copy(scalar_expr=operands[0], sum_indices=tuple(operands[1:]))
     
-    def postOrder(self, fn: typing.Callable):
-        new_sub = self.scalar_expr.postOrder(fn)
-        new_indices = tuple(op.postOrder(fn) for op in self.sum_indices)
-        return fn(self.copy(scalar_expr=new_sub, sum_indices=new_indices))
+    # def postOrder(self, fn: typing.Callable):
+    #     new_sub = self.scalar_expr.postOrder(fn)
+    #     new_indices = tuple(op.postOrder(fn) for op in self.sum_indices)
+    #     return fn(self.copy(scalar_expr=new_sub, sum_indices=new_indices))
     
     def __str__(self) -> str:
         return f"Sum[{','.join(map(str, self.sum_indices))}]({self.scalar_expr})"
@@ -434,8 +434,8 @@ class TensorVariable(TensorExpr):
     def with_operands(self, operands: List):
         return self.copy(tensor_space=operands[0])
     
-    def postOrder(self, fn: typing.Callable):
-        return fn(self.copy(tensor_space=self.space.postOrder(fn)))
+    # def postOrder(self, fn: typing.Callable):
+    #     return fn(self.copy(tensor_space=self.space.postOrder(fn)))
     
     # @property
     # def _key(self):
@@ -477,10 +477,10 @@ class deIndex(TensorExpr):
     def with_operands(self, operands: List):
         return self.copy(scalar_expr=operands[0], indices=tuple(operands[1:]))
     
-    def postOrder(self, fn: typing.Callable):
-        new_scalar_expr = self.scalar_expr.postOrder(fn)
-        new_indices = tuple(op.postOrder(fn) for op in self.indices)
-        return fn(self.copy(scalar_expr=new_scalar_expr, indices=new_indices))
+    # def postOrder(self, fn: typing.Callable):
+    #     new_scalar_expr = self.scalar_expr.postOrder(fn)
+    #     new_indices = tuple(op.postOrder(fn) for op in self.indices)
+    #     return fn(self.copy(scalar_expr=new_scalar_expr, indices=new_indices))
     
     def __str__(self) -> str:
         return f"({self.scalar_expr})|{','.join(map(str, self.indices))}|"
@@ -501,10 +501,10 @@ class Lambda(Node):
     def with_operands(self, operands: List):
         return self.copy(vars=tuple(operands[:-1]), tensor_expr=operands[-1])
     
-    def postOrder(self, fn: typing.Callable):
-        new_vars = tuple(op.postOrder(fn) for op in self.vars)
-        new_sub = self.tensor_expr.postOrder(fn)
-        return fn(self.copy(vars=new_vars, tensor_expr=new_sub))
+    # def postOrder(self, fn: typing.Callable):
+    #     new_vars = tuple(op.postOrder(fn) for op in self.vars)
+    #     new_sub = self.tensor_expr.postOrder(fn)
+    #     return fn(self.copy(vars=new_vars, tensor_expr=new_sub))
     
     def __str__(self) -> str:
         return f"λ{','.join([str(v) for v in self.vars])}.{self.tensor_expr}"

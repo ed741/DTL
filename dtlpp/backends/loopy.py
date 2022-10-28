@@ -67,7 +67,10 @@ class KernelBuilder:
     
     @_get_domains.register
     def _(self, expr: dtl.ScalarExpr):
-        return frozenset.union(*[self._get_domains(child) for child in expr.operands])
+        if len(expr.operands)>0:
+            return frozenset.union(*[self._get_domains(child) for child in expr.operands])
+        else:
+            return frozenset()
     
     @functools.singledispatchmethod
     def _get_expression(self, expr: dtl.ScalarExpr):
@@ -79,6 +82,12 @@ class KernelBuilder:
         # return f"sum({','.join(idx.name for idx in expr.sum_indices)}, {self._get_expression(expr.scalar_expr)})"
         return lp.Reduction(lp.library.reduction.SumReductionOperation(), inames, self._get_expression(expr.scalar_expr))
         # return lp.Reduction("sum", inames, self._get_expression(expr.scalar_expr))
+
+    @_get_expression.register
+    def _(self, expr: dtl.Literal):
+        # return f"({self._get_expression(expr.lhs)} * {self._get_expression(expr.rhs)})"
+        return expr.f
+
 
     @_get_expression.register
     def _(self, expr: dtl.MulBinOp):

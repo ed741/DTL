@@ -290,6 +290,10 @@ class BinOp(ScalarExpr, abc.ABC):
     fields = ScalarExpr.fields | {"lhs", "rhs"}
     
     def __init__(self, lhs: ScalarExpr, rhs: ScalarExpr, **kwargs):
+        if (isinstance(lhs, (int, float))):
+            lhs = Literal(lhs)
+        if (isinstance(rhs, (int, float))):
+            rhs = Literal(rhs)
         # check that common indices share the same space
         if any(
             lhs.index_spaces[idx] != rhs.index_spaces[idx]

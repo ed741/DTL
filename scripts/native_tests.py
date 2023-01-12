@@ -3,7 +3,7 @@ from dtl.dag import RealVectorSpace, Index, Lambda
 from dtlpp.backends.native import KernelBuilder
 import numpy as np
 
-from dtlutils import visualize
+from dtlutils import visualise
 
 v5 = RealVectorSpace(5)
 v9 = RealVectorSpace(9)
@@ -22,19 +22,22 @@ C = (v7*v3).new("C")
 C_TT1 = C[i,j].forall(i,j)
 C_TT2 = C[i,j].forall(i,j)
 expr = (((A[i,j] + (B[k,i] * (C_TT1)[k,p]).sum(k)).forall(j,p))[i,j]*(C_TT2)[k,j]).forall(i,k)
+
+expr = (A[i,j] * B[k,i]).forall(k,i)
+expr = (expr[k,i] * expr[k,i]).forall(i, k)
 # expr = (A[i,j] * B[k,i]).forall(j,k)
 print("native_test.2")
-# visualize.plot_dag(expr, view=True, label_edges=True)
-visualize.plot_network(expr, view=True)
+# visualise.plot_dag(expr, view=True, label_edges=True)
+visualise.plot_dag(expr, view=True, label_edges=True, coalesce_duplicates=False)
 
-builder = KernelBuilder(expr)
+builder = KernelBuilder([expr, expr])
 print("native_test.3")
 kernel = builder.build()
 print("native_test.4")
 print(kernel)
 print("native_test.5")
 print("native_test.6")
-visualize.plot_dag(builder._expr, view=True, label_edges=True)
+visualise.plot_dag(builder._expr, view=True, label_edges=True)
 print("native_test.7")
 
 input_tensor_A = np.ones(A.space.shape)

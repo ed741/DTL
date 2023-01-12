@@ -1,7 +1,7 @@
 import math
 
 from dtl import *
-from dtlutils import visualize
+from dtlutils import visualise
 from dtlutils.names import make_Index_names_unique
 from dtlutils.traversal import postOrder
 
@@ -41,8 +41,8 @@ def func1():
         return node.copy()
     print("Post order:")
     T1 = postOrder(T1, printNodeName)
-    visualize.plot_dag(T1, view=True, coalesce_duplicates=True)
-    # visualize.plot_dag(T1, view=True, coalesce_duplicates=True)
+    visualise.plot_dag(T1, view=True, coalesce_duplicates=True)
+    # visualise.plot_dag(T1, view=True, coalesce_duplicates=True)
 
 def mttkrp():
     vsI = UnknownSizeVectorSpace("I")
@@ -56,8 +56,8 @@ def mttkrp():
     
     mttkrp_expr = Lambda([TB:=(vsI*vsK*vsL).new("TB"), TC:= (vsL*vsJ).new("TC"), TD:= (vsK*vsJ).new("TD")],
                          (TB[i,k,l]*TC[l,j]*TD[k,j]).forall(i,j))
-    visualize.plot_dag(mttkrp_expr, view=True, coalesce_duplicates=True)
-    visualize.plot_network(mttkrp_expr, view=True)
+    visualise.plot_dag(mttkrp_expr, view=True, coalesce_duplicates=True)
+    visualise.plot_network(mttkrp_expr, view=True)
 
 
 def tucker():
@@ -76,8 +76,8 @@ def tucker():
     
     mttkrp_expr = Lambda([TG := (vsP * vsQ * vsR).new("TG"), TA := (vsI * vsP).new("TA"), TB := (vsJ * vsQ).new("TB"), TC := (vsK * vsR).new("TC")],
                          (TG[p, q, r] * TA[i, p] * TB[j, q] * TC[k, r]).forall(i, j, k))
-    visualize.plot_dag(mttkrp_expr, view=True, coalesce_duplicates=True)
-    visualize.plot_network(mttkrp_expr, view=True)
+    visualise.plot_dag(mttkrp_expr, view=True, coalesce_duplicates=True)
+    visualise.plot_network(mttkrp_expr, view=True)
 
 
 def func2():
@@ -93,8 +93,8 @@ def func2():
     
     expr = Lambda([TA := (vsI * vsJ * vsK).new("TA"), TB := (vsI * vsJ).new("TB"), TC := (vsK * vsJ).new("TC")],
                          ((TA[i, j, k] * TB[i, j] * TC[k, j]).forall(i, j)[l].forall(l)[i] * TA[i,j,k]).forall(j,k))
-    # visualize.plot_dag(expr, view=True, coalesce_duplicates=True)
-    visualize.plot_network(expr, view=True)
+    # visualise.plot_dag(expr, view=True, coalesce_duplicates=True)
+    visualise.plot_network(expr, view=True)
 
 
 def func3():
@@ -111,9 +111,10 @@ def func3():
     expr = Lambda([TA := (vsI * vsJ * vsJ).new("TA"), TB := (vsI * vsJ * vsJ).new("TB"), TC := (vsJ * vsJ).new("TC")],
                   ((TA[i, j, k] * TA[i, k, j] * TC[k, j]).forall(i, j)[l].forall(l)[i] * TA[i, j, k]).forall(j, k))
     expr2 = make_Index_names_unique(expr)
-    visualize.plot_dag(expr2, view=True, coalesce_duplicates=True)
-    # visualize.plot_network(expr.tensor_expr.scalar_expr.scalar_expr.lhs.tensor_expr, view=True)
-    # visualize.plot_network(expr.tensor_expr, view=True)
+    visualise.plot_dag(expr2, view=True, coalesce_duplicates=True)
+    # visualise.plot_network(expr.tensor_expr.scalar_expr.scalar_expr.lhs.tensor_expr, view=True)
+    # visualise.plot_network(expr.tensor_expr, view=True)
+
 
 # func1()
 # mttkrp()

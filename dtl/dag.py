@@ -102,9 +102,11 @@ class VectorSpaceVariable(Terminal, abc.ABC):
     def __mul__(self, other):
         if isinstance(other, VectorSpaceVariable):
             return TensorSpace([self, other])
+        elif isinstance(other, TensorSpace):
+            return TensorSpace([self] + (list(other.spaces)))
         else:
             return NotImplemented
-    
+
     def __pow__(self, other):
         if isinstance(other, numbers.Integral):
             return TensorSpace([self] * other)
@@ -149,7 +151,17 @@ class RealVectorSpace(VectorSpace):
 class TensorSpace(Node):
     fields = Node.fields | {"spaces"}
     
-    def __init__(self, spaces: Iterable[VectorSpaceVariable], **kwargs):
+    def __init__(self, spaces: Iterable[Union[VectorSpaceVariable, 'TensorSpace']], **kwargs):
+        n_spaces = []
+        for space in spaces:
+            if isinstance(space, VectorSpace):
+                n_spaces.append(space)
+            elif isinstance(space, TensorSpace):
+                for s in space.spaces:
+                    n_spaces.append(s)
+            else:
+                raise ValueError(f"TensorSpace accepts only an Iterable consisting of VectorSpaceVariable and TensorSpace. {str(space)} does not confirm.")
+        spaces = n_spaces
         symbol = None
         for space in spaces:
             if isinstance(space, VectorSpace):
@@ -172,6 +184,8 @@ class TensorSpace(Node):
     def __mul__(self, other):
         if isinstance(other, VectorSpaceVariable):
             return TensorSpace((list(self.spaces) + [other]))
+        elif isinstance(other, TensorSpace):
+            return TensorSpace((list(self.spaces) + (list(other.spaces))))
         else:
             return NotImplemented
     
@@ -192,7 +206,7 @@ class TensorExpr(Node, abc.ABC):
     def space(self):
         """The `TensorSpace` of the expression."""
     
-    def __getitem__(self, indices: Iterable[Index]):
+    def __getitem__(self, indices: Union[Index, Iterable[Index]]):
         if not isinstance(indices, collections.abc.Iterable):
             indices = (indices,)
         indices = tuple(indices)
@@ -232,6 +246,9 @@ class ScalarExpr(Node, abc.ABC):
     def __add__(self, other: "ScalarExpr") -> "ScalarExpr":
         return AddBinOp(self, other)
     
+    def __sub__(self, other: "ScalarExpr") -> "ScalarExpr":
+        return SubBinOp(self, other)
+    
     def __mul__(self, other: "ScalarExpr") -> "ScalarExpr":
         return MulBinOp(self, other)
 
@@ -257,6 +274,10 @@ class IndexedTensor(ScalarExpr):
     fields = ScalarExpr.fields | {"tensor_expr", "tensor_indices"}
     
     def __init__(self, tensor_expr: TensorExpr, tensor_indices: Iterable[Index], **kwargs):
+        if len(tensor_expr.space.spaces) != len(list(tensor_indices)):
+            raise ValueError(f"Number of indices must match tensor expression order\n"
+                             f"Indices: [{','.join([idx.name for idx in tensor_indices])}]\n"
+                             f"Space:   {str(tensor_expr.space)}")
         super().__init__(tensor_expr=tensor_expr, tensor_indices=tuple(tensor_indices), **kwargs)
     
     @property
@@ -299,8 +320,15 @@ class BinOp(ScalarExpr, abc.ABC):
             lhs.index_spaces[idx] != rhs.index_spaces[idx]
             for idx in set(lhs.indices) & set(rhs.indices)
         ):
+            l = [ f"{str(idx).ljust(8)} " \
+                  f"{(str(lhs.index_spaces[idx]) if idx in lhs.index_spaces else '_').ljust(8)} " \
+                  f"{(str(rhs.index_spaces[idx]) if idx in rhs.index_spaces else '_').ljust(8)} "
+                  for idx in set(lhs.indices) & set(rhs.indices)]
+            nl = '\n'
             raise ValueError(
-                "Indices common across subexpressions must act over the same space"
+                f"Indices common across subexpressions must act over the same space\n"
+                f"Name     lhs      rhs\n"
+                f"{nl.join(l)}"
             )
         super().__init__(lhs=lhs, rhs=rhs, **kwargs)
     
@@ -339,6 +367,9 @@ class MulBinOp(BinOp):
 
 class AddBinOp(BinOp):
     symbol = "+"
+    
+class SubBinOp(BinOp):
+    symbol = "-"
 
 
 class UnaryOp(ScalarExpr, abc.ABC):
@@ -462,6 +493,8 @@ class deIndex(TensorExpr):
     fields = TensorExpr.fields | {"scalar_expr", "indices"}
     
     def __init__(self, scalar_expr: ScalarExpr, indices: Iterable[Index], **kwargs):
+        if len(set(indices).difference(scalar_expr.free_indices)) > 0:
+            raise ValueError(f"cannot deindex along index ([{','.join(str(i) for i in indices)}]) that is not free ([{','.join(str(i) for i in scalar_expr.free_indices)}]) in the expression")
         if set(indices) != set(scalar_expr.free_indices):
             scalar_expr = IndexSum(scalar_expr, set(scalar_expr.free_indices) - set(indices))
         super().__init__(scalar_expr=scalar_expr, indices=tuple(indices), **kwargs)

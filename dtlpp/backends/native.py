@@ -2,12 +2,14 @@ import abc
 import typing
 
 import dtl
+import dtl.dag_ext_non_scalar as nddtl
 import itertools
 import functools
 import numpy as np
 
-from dtlutils import visualize
-from dtlutils.names import make_Index_names_unique
+from dtl import Node
+from dtlutils import visualise
+from dtlutils.names import make_Index_names_unique, make_Index_names_unique_CSE
 
 from dtlutils.traversal import path_id
 
@@ -24,19 +26,30 @@ class ExpressionNode(abc.ABC):
     def __str__(self):
         return self.code()
 
-
-class ExprTensor(ExpressionNode):
-    def __init__(self, name: str, indices: typing.List[str]):
-        self.name = name
+class ExprIndexed(ExpressionNode):
+    def __init__(self, expr: ExpressionNode, indices: typing.List[str]):
+        self.expr = expr
         self.indices = indices
     
     def code(self):
-        return f"{self.name}[{','.join(self.indices)}]"
-
+        return f"{self.expr.code()}[{','.join(self.indices)}]"
+    
     def do(self, args: typing.Dict[str, typing.Any]):
         idx = tuple(args[i] for i in self.indices)
-        return args[self.name][idx]
+        return self.expr.do(args)[idx]
 
+# class ExprTensor(ExpressionNode):
+#     def __init__(self, name: str, indices: typing.List[str]):
+#         self.name = name
+#         self.indices = indices
+#
+#     def code(self):
+#         return f"{self.name}[{','.join(self.indices)}]"
+#
+#     def do(self, args: typing.Dict[str, typing.Any]):
+#         idx = tuple(args[i] for i in self.indices)
+#         return args[self.name][idx]
+#
 
 class ExprAdd(ExpressionNode):
     def __init__(self, lhs: ExpressionNode, rhs: ExpressionNode):
@@ -48,6 +61,18 @@ class ExprAdd(ExpressionNode):
     
     def do(self, args: typing.Dict[str, typing.Any]):
         return self.lhs.do(args) + self.rhs.do(args)
+
+
+class ExprSub(ExpressionNode):
+    def __init__(self, lhs: ExpressionNode, rhs: ExpressionNode):
+        self.lhs = lhs
+        self.rhs = rhs
+    
+    def code(self):
+        return f"({self.lhs} - {self.rhs})"
+    
+    def do(self, args: typing.Dict[str, typing.Any]):
+        return self.lhs.do(args) - self.rhs.do(args)
 
 
 class ExprMul(ExpressionNode):
@@ -75,6 +100,26 @@ class ExprConst(ExpressionNode):
         else:
             return args[self.val]
 
+class ExprNdMax(ExpressionNode):
+    def __init__(self, expr: ExpressionNode):
+        self.expr = expr
+    
+    def code(self):
+        return f"(np.max({self.expr}))"
+    
+    def do(self, args: typing.Dict[str, typing.Any]):
+        return np.max(self.expr.do(args))
+
+class ExprNdMatInv(ExpressionNode):
+    def __init__(self, expr: ExpressionNode):
+        self.expr = expr
+    
+    def code(self):
+        return f"(np.linalg.inv({self.expr}))"
+    
+    def do(self, args: typing.Dict[str, typing.Any]):
+        return np.linalg.inv(self.expr.do(args))
+
 
 class CodeNode(abc.ABC):
     @abc.abstractmethod
@@ -90,12 +135,16 @@ class CodeNode(abc.ABC):
 
 
 class Func():
-    def __init__(self, child: CodeNode):
+    def __init__(self, child: CodeNode, results: typing.List[str]):
         self.child = child
+        self.results = results
     
     def do(self, **kwargs):
         self.child.do(kwargs)
-        return kwargs['P_']
+        return tuple([kwargs[n] for n in self.results])
+    
+    def code(self):
+        return self.child.code(0)
         
         
 class Loop(CodeNode):
@@ -187,6 +236,15 @@ class InitTensor(CodeNode):
     def do(self, args: typing.Dict[str, typing.Any]):
         args[self.name]= np.zeros(self.indices)
 
+class CodeComment(CodeNode):
+    def __init__(self, comment: str):
+        self.comment = comment
+    
+    def code(self, indent: int) -> str:
+        return f"{'    ' * indent}#{self.comment}"
+    
+    def do(self, args: typing.Dict[str, typing.Any]):
+        pass
 
 
 class NameGenerator:
@@ -201,9 +259,20 @@ class NameGenerator:
     def next(self):
         return f"{self._prefix}{next(self._counter)}{self._suffix}"
 
+class PythonDtlNode(Node):
+    def get_expression(self, kernelBuilder):
+        pass # return CodeNode, ExpressionNode
+    
+    def collect_bits(self, kernelBuilder, path, **kwargs):
+        for child in self.operands:
+            kernelBuilder._collect_bits(child, path + [path_id(self, child)])
 
 class KernelBuilder:
     def __init__(self, expr):
+        if isinstance(expr, typing.Iterable):
+            expr = list(expr)
+        else:
+            expr = [expr]
         self._expr = expr
         self.domains = []
         self.instructions = []
@@ -214,17 +283,20 @@ class KernelBuilder:
     
     def build(self):
         print("buildA")
-        self._expr = make_Index_names_unique(self._expr)
-        visualize.plot_dag(self._expr, view=True, label_edges=True)
+        self._expr = make_Index_names_unique_CSE(self._expr)
+        visualise.plot_dag(self._expr, view=True, label_edges=True)
         
-        inputs = self._get_inputs(self._expr)
+        inputs = frozenset()
+        for e in self._expr: inputs = inputs.union(self._get_inputs(e))
         self.instructions.append(f"def func({','.join(inputs)}):")
-        self._collect_bits(self._expr, [])
-        self.instructions.append(f"    return P_")
+        for i,e in enumerate(self._expr):
+            self._collect_bits(e, [i])
+        self.instructions.append(f"    return {','.join([self.registered_tensor_variables[e][0] for e in self._expr])}")
         print("Instructions::\n")
         code = "\n".join(self.instructions)
         print(code)
-        return Func(SeqNode(self.codeNodes)).do
+        self.codeNode = Func(SeqNode(self.codeNodes), [self.registered_tensor_variables[e][0] for e in self._expr])
+        return self.codeNode.do
         
 
 
@@ -232,36 +304,41 @@ class KernelBuilder:
     def _get_inputs(self, expr):
         s = frozenset()
         for child in expr.operands:
-            s = s.union(self._get_inputs(child))
+            child_inputs = self._get_inputs(child)
+            s = s.union(child_inputs)
         return s
         # return frozenset.union(frozenset(), (self._get_inputs(child) for child in expr.operands))
     
     @_get_inputs.register
     def _(self, expr: dtl.TensorVariable):
-        return frozenset(expr.name)
-
-    @functools.singledispatchmethod
-    def _get_domains(self, expr: dtl.Node):
-        return frozenset()
-    
-    @_get_domains.register
-    def _(self, expr: dtl.IndexSum):
-        domains = set()
-        for idx in expr.sum_indices:
-            space = expr.index_spaces[idx]
-            if isinstance(space, dtl.UnknownSizeVectorSpace):
-                raise NotImplementedError
-            size = space.dim
-            domain = f"{{ [{idx.name}]: 0 <= {idx.name} < {size} }}"
-            domains.add(domain)
-        return frozenset(domains) | self._get_domains(expr.scalar_expr)
-    
-    @_get_domains.register
-    def _(self, expr: dtl.ScalarExpr):
-        return frozenset.union(*[self._get_domains(child) for child in expr.operands])
-    
+        return frozenset([expr.name])
+    #
+    # @functools.singledispatchmethod
+    # def _get_domains(self, expr: dtl.Node):
+    #     return frozenset()
+    #
+    # @_get_domains.register
+    # def _(self, expr: dtl.IndexSum):
+    #     domains = set()
+    #     for idx in expr.sum_indices:
+    #         space = expr.index_spaces[idx]
+    #         if isinstance(space, dtl.UnknownSizeVectorSpace):
+    #             raise NotImplementedError
+    #         size = space.dim
+    #         domain = f"{{ [{idx.name}]: 0 <= {idx.name} < {size} }}"
+    #         domains.add(domain)
+    #     return frozenset(domains) | self._get_domains(expr.scalar_expr)
+    #
+    # @_get_domains.register
+    # def _(self, expr: dtl.ScalarExpr):
+    #     return frozenset.union(*[self._get_domains(child) for child in expr.operands])
+    #
     @functools.singledispatchmethod
     def _get_expression(self, expr: dtl.ScalarExpr):
+        """ return tuple:
+            (instructions required to produce output. expression that produces output)
+            (CodeNode, ExpressionNode)
+            """
         raise TypeError
     
     @_get_expression.register
@@ -287,11 +364,58 @@ class KernelBuilder:
         l_sub_inst, l_sub_expression = self._get_expression(expr.lhs)
         r_sub_inst, r_sub_expression = self._get_expression(expr.rhs)
         return SeqNode([l_sub_inst, r_sub_inst]), ExprAdd(l_sub_expression, r_sub_expression)
+
+    @_get_expression.register
+    def _(self, expr: dtl.SubBinOp):
+        l_sub_inst, l_sub_expression = self._get_expression(expr.lhs)
+        r_sub_inst, r_sub_expression = self._get_expression(expr.rhs)
+        return SeqNode([l_sub_inst, r_sub_inst]), ExprSub(l_sub_expression, r_sub_expression)
     
     @_get_expression.register
     def _(self, expr: dtl.IndexedTensor):
-        return SeqNode([]), ExprTensor(self.registered_tensor_variables[expr.tensor_expr][0], [i.name for i in expr.tensor_indices])
+        return SeqNode([]), ExprIndexed(ExprConst(self.registered_tensor_variables[expr.tensor_expr][0]), [i.name for i in expr.tensor_indices])
     
+    @_get_expression.register
+    def _(self, expr: nddtl.NDScalarExpr):
+        sub_inst, sub_expression = self._get_expression(expr.nd_expr)
+        if len(expr.nd_expr.nd_space_indices) >0:
+            return sub_inst, ExprIndexed(sub_expression, [i.name for i in expr.nd_expr.nd_space_indices])
+        else:
+            return sub_inst, sub_expression
+
+    @_get_expression.register
+    def _(self, expr: nddtl.IndexedNDTensor):
+        # sub_inst, sub_expression = self._get_expression(expr.scalar_expr)
+        # return sub_inst, ExprIndexed(sub_expression, [i.name for i in expr.tensor_indices])
+        # tvar_name = f"P_{'_'.join(str(p) for p in path)}"
+        tvar_name = self._namer.next()
+        inst = [
+            InitTensor(tvar_name, [expr.index_spaces[k].dim for k in expr.tensor_indices])
+        ]
+        expr_inst, expression = self._get_expression(expr.scalar_expr)
+        loop = SeqNode([expr_inst,
+                        AssignTensor(tvar_name, [i.name for i in expr.tensor_indices], expression)])
+        for i in expr.tensor_indices:
+            loop = Loop(i.name, expr.index_spaces[i].dim, loop)
+        inst.append(loop)
+        code = SeqNode(inst)
+        return code, ExprConst(tvar_name)
+
+    @_get_expression.register
+    def _(self, expr: nddtl.MaxNdExprOp):
+        sub_inst, sub_expression = self._get_expression(expr.nd_expr)
+        return sub_inst, ExprNdMax(sub_expression)
+    
+    @_get_expression.register
+    def _(self, expr: nddtl.MatrixInverseNdExprOp):
+        sub_inst, sub_expression = self._get_expression(expr.nd_expr)
+        return sub_inst, ExprNdMatInv(sub_expression)
+    
+    @_get_expression.register
+    def _(self, expr:PythonDtlNode):
+        return expr.get_expression(self)
+
+
     @_get_expression.register
     def _(self, expr: dtl.TensorVariable):
         return TypeError
@@ -342,6 +466,39 @@ class KernelBuilder:
             self.registered_tensor_variables[tensor_variable] = (tvar_name, shape)
     
     
+    @_collect_bits.register
+    def _(self, expr:PythonDtlNode, path, **kwargs):
+        return expr.collect_bits(self, path, **kwargs)
+    
+    # @_collect_bits.register
+    # def _(self, expr: nddtl.NDScalarExpr, path, **kwargs):
+    #     tvar_name = f"P_{'_'.join(str(p) for p in path)}"
+    #     print(f"build NDScalarExpr: {tvar_name}")
+    #     if expr in self.registered_tensor_variables:
+    #         print(f"{tvar_name} already built as {self.registered_tensor_variables[expr]}")
+    #     else:
+    #         self.registered_tensor_variables[expr] = (tvar_name, shape_from_TensorExpr(expr))
+    #
+    #         # ensure tensors we rely on exist
+    #         self._collect_bits(expr.scalar_expr, path + [path_id(expr, expr.scalar_expr)])
+    #
+    #         # Init Np array for output
+    #         inst = [
+    #             InitTensor(tvar_name, [expr.index_spaces[k].dim for k in expr.indices])
+    #         ]
+    #         # generate the inner expressions
+    #         expr_inst, expression = self._get_expression(expr.scalar_expr)
+    #         loop = SeqNode([expr_inst,
+    #                         AssignTensor(tvar_name, [i.name for i in expr.indices], expression)])
+    #         # generate loops to fill the output
+    #         for i in expr.indices:
+    #             loop = Loop(i.name, expr.index_spaces[i].dim, loop)
+    #
+    #         inst.append(loop)
+    #         code = SeqNode(inst)
+    #         self.instructions.append(code.code(1))
+    #         self.codeNodes.append(code)
+    #
 
 def shape_from_TensorExpr(expr: dtl.TensorExpr):
     shape = []

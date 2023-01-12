@@ -5,7 +5,7 @@ import functools
 import pymbolic as pym
 import numpy as np
 
-from dtlutils import visualize
+from dtlutils import visualise
 from dtlutils.names import make_Index_names_unique
 
 from dtlutils.traversal import path_id, get_scope
@@ -36,7 +36,7 @@ class KernelBuilder:
     def build(self):
         print("buildA")
         self._expr = make_Index_names_unique(self._expr)
-        visualize.plot_dag(self._expr.scalar_expr, view=True, label_edges=True)
+        visualise.plot_dag(self._expr.scalar_expr, view=True, label_edges=True)
         self._collect_bits(self._expr, [])
         print("buildB")
 

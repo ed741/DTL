@@ -5,13 +5,13 @@ from dtl import *
 from dtlutils.traversal import postOrderRoute, get_scope
 
 
-def plot_dag(expr: dtl.Node, *, name="expression", view=False, coalesce_duplicates=True, label_edges=False, **kwargs):
+def plot_dag(expr: typing.Union[dtl.Node, typing.Iterable[dtl.Node]], *, name="expression", view=False, coalesce_duplicates=True, label_edges=False, **kwargs):
     """Render loop expression as a DAG and write to a file.
 
     Parameters
     ----------
-    expr : pyop3.Expression
-        The loop expression.
+    expr : dtl.Node
+        The tensor expression.
     name : str, optional
         The name of DAG (and the save file).
     view : bool, optional
@@ -21,7 +21,10 @@ def plot_dag(expr: dtl.Node, *, name="expression", view=False, coalesce_duplicat
     """
     dag = graphviz.Digraph(name, **kwargs)
     seen = {}
-    _plot_dag(expr, dag, seen, coalesce_duplicates=coalesce_duplicates, label_edges=label_edges)
+    if not isinstance(expr, Iterable):
+        expr = [expr]
+    for e in expr:
+        _plot_dag(e, dag, seen, coalesce_duplicates=coalesce_duplicates, label_edges=label_edges)
     dag.render(quiet_view=view)
 
 

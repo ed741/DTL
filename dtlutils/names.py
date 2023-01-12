@@ -1,7 +1,10 @@
 import itertools
+import typing
+from typing import Iterable, List
 
+import dtl
 from dtl import Node, Index
-from dtlutils.traversal import postOrderRoute, get_scope, node_from_path, prepostOrderRoute
+from dtlutils.traversal import postOrderRoute, get_scope, node_from_path, prepostOrderRoute, prepostOrderRoutePassback
 
 
 class NameGenerator:
@@ -19,40 +22,98 @@ class NameGenerator:
     def __next__(self):
         return f"{self._prefix}{next(self._counter)}{self._suffix}"
 
-
-def make_Index_names_unique(root: Node):
-    names = set()
-    new_index_node_map = {}
-    name_count = 0
-    seen_nodes = {}
+class AugmentedNameGenerator:
+    def __init__(self):
+        self._names = set()
     
-    def _get_new_name(old_name):
+    def registerName(self, name:str):
+        self._names.add(name)
+    
+    def getNewName(self, old_name:str):
+        if old_name not in self._names:
+            self._names.add(old_name)
+            return old_name
         i = 0
-        while (name := f"{old_name}_{str(i)}") in names:
+        while (name := f"{old_name}_{str(i)}") in self._names:
             i += 1
-        names.add(name)
+        self._names.add(name)
         return name
     
-    def _make_Index_name_unique_pre_fun(node, path):
-        return None
-    
-    def _make_Index_names_unique(node, pre_fun_result, path):
-        # if node in seen_nodes:
-        #     return seen_nodes[node]
+
+def make_Index_names_unique(root: Node):
+    new_index_node_map = {}
+    nameGen = AugmentedNameGenerator()
+    def _make_Index_names_unique(node, path):
         if isinstance(node, Index):
-            scopePath = tuple(get_scope(root, node, path))
-            if scopePath is None:
-                raise NotImplementedError
-            # scopeNode = node_from_path(root, scopePath)
+            scope = get_scope(root, node, path)
+            if scope is None:
+                # if the index is free in an expression then there is no scope - this should hopefully allow us to
+                # still ensure unique indices.
+                scope = [-1]
+            scopePath = tuple(scope)
             if (scopePath, node) in new_index_node_map:
                 return new_index_node_map[(scopePath, node)]
             else:
-                name = _get_new_name(node.name)
+                name = nameGen.getNewName(node.name)
                 newNode = node.copy(name=name)
                 new_index_node_map[(scopePath, node)] = newNode
-                seen_nodes[node] = newNode
                 return newNode
-        seen_nodes[node] = node
+        else:
+            pass
         return node
-    return prepostOrderRoute(root, _make_Index_name_unique_pre_fun, _make_Index_names_unique)
+    return postOrderRoute(root, _make_Index_names_unique)
+
+
+def make_Index_names_unique_CSE(root: typing.Union[Node, List[Node]]):
+    return_List = True
+    if not isinstance(root, List):
+        root = [root]
+        return_List = False
+    new_index_node_map = {}
+    nameGen = AugmentedNameGenerator()
+    cses = {}
     
+    def _pre_func(node, path):
+        return node
+    def _make_Index_names_unique(node, preNode, path, passback):
+        """
+        :param node: The current node (with its new child operands based on the already passed sub-dags)
+        :param preNode: The current node from before it was re-made with new children
+        :param path: The path from the root taken to get to the current node on this pass
+        :param passback: Lists of paths(list of lists of: lists of ints), for each operand, lists of paths,
+                         one path per enclosed index for which the scope is still open
+        :return:
+        """
+        if isinstance(node, dtl.Terminal):
+            if len(passback)>0:
+                raise ValueError("passback cannot be anything but empty list for a terminal")
+        passback = [p for sl in passback for p in sl]
+        if isinstance(node, Index):
+            scope = get_scope(root[path[0]], node, path[1:])
+            if scope is None:
+                # if the index is free in an expression then there is no scope - this should hopefully allow us to
+                # still ensure unique indices.
+                scope = [-1]
+            scopePath = tuple([path[0], *scope])
+            if (scopePath, node) in new_index_node_map:
+                return new_index_node_map[(scopePath, node)], [scopePath]
+            else:
+                name = nameGen.getNewName(node.name)
+                newNode = node.copy(name=name)
+                new_index_node_map[(scopePath, node)] = newNode
+                return newNode, [scopePath]
+        else:
+            passback = [p for p in passback if p != path]
+            if len(passback) == 0:
+                if preNode in cses:
+                    return cses[preNode], []
+                else:
+                    cses[preNode] = node
+                    return node, []
+            else:
+                return node, passback
+    
+    if return_List:
+        return [prepostOrderRoutePassback(n, _pre_func, _make_Index_names_unique, path=[i])[0] for i,n in enumerate(root)]
+    else:
+        return prepostOrderRoutePassback(root, _pre_func, _make_Index_names_unique)[0]

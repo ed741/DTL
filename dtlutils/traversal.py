@@ -22,6 +22,16 @@ def prepostOrderRoute(node: Node, pre_fn, post_fn, path=None):
     new_operands = [prepostOrderRoute(n, pre_fn, post_fn, path=(path+[i])) for i, n in enumerate(operands)]
     return post_fn(node.with_operands(new_operands), pre_fn_result, tuple(path))
 
+def prepostOrderRoutePassback(node: Node, pre_fn, post_fn, path=None):
+    if path is None:
+        path = []
+    pre_fn_result = pre_fn(node, tuple(path))
+    operands = node.operands
+    results = [prepostOrderRoutePassback(n, pre_fn, post_fn, path=(path + [i])) for i, n in enumerate(operands)]
+    new_operands = [n for n,p in results]
+    passback = [p for n, p in results]
+    return post_fn(node.with_operands(new_operands), pre_fn_result, tuple(path), passback)
+
 
 def forAll(node: Node, fn, seen=None):
     if seen is None:

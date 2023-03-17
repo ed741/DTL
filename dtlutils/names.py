@@ -4,7 +4,7 @@ from typing import Iterable, List
 
 import dtl
 from dtl import Node, Index
-from dtlutils.traversal import postOrderRoute, get_scope, node_from_path, prepostOrderRoute, prepostOrderRoutePassback
+from dtlutils.traversal import postOrderPath, get_scope, node_from_path, prepostOrderPathPassback, allOperands
 
 
 class NameGenerator:
@@ -61,7 +61,7 @@ def make_Index_names_unique(root: Node):
         else:
             pass
         return node
-    return postOrderRoute(root, _make_Index_names_unique)
+    return postOrderPath(root, _make_Index_names_unique)
 
 
 def make_Index_names_unique_CSE(root: typing.Union[Node, List[Node]]):
@@ -80,14 +80,13 @@ def make_Index_names_unique_CSE(root: typing.Union[Node, List[Node]]):
         :param node: The current node (with its new child operands based on the already passed sub-dags)
         :param preNode: The current node from before it was re-made with new children
         :param path: The path from the root taken to get to the current node on this pass
-        :param passback: Lists of paths(list of lists of: lists of ints), for each operand, lists of paths,
-                         one path per enclosed index for which the scope is still open
+        :param passback: Sets of paths for each operand
         :return:
         """
         if isinstance(node, dtl.Terminal):
             if len(passback)>0:
-                raise ValueError("passback cannot be anything but empty list for a terminal")
-        passback = [p for sl in passback for p in sl]
+                raise ValueError("passback cannot be anything but empty set for a terminal")
+        passback = set([p for sl in allOperands(passback) for p in sl])
         if isinstance(node, Index):
             scope = get_scope(root[path[0]], node, path[1:])
             if scope is None:
@@ -96,24 +95,24 @@ def make_Index_names_unique_CSE(root: typing.Union[Node, List[Node]]):
                 scope = [-1]
             scopePath = tuple([path[0], *scope])
             if (scopePath, node) in new_index_node_map:
-                return new_index_node_map[(scopePath, node)], [scopePath]
+                return new_index_node_map[(scopePath, node)], {scopePath}
             else:
                 name = nameGen.getNewName(node.name)
                 newNode = node.copy(name=name)
                 new_index_node_map[(scopePath, node)] = newNode
-                return newNode, [scopePath]
+                return newNode, {scopePath}
         else:
-            passback = [p for p in passback if p != path]
+            passback = set([p for p in passback if p != path])
             if len(passback) == 0:
                 if preNode in cses:
-                    return cses[preNode], []
+                    return cses[preNode], set()
                 else:
                     cses[preNode] = node
-                    return node, []
+                    return node, set()
             else:
                 return node, passback
     
     if return_List:
-        return [prepostOrderRoutePassback(n, _pre_func, _make_Index_names_unique, path=[i])[0] for i,n in enumerate(root)]
+        return [prepostOrderPathPassback(n, _pre_func, _make_Index_names_unique, path=[i])[0] for i,n in enumerate(root)]
     else:
-        return prepostOrderRoutePassback(root, _pre_func, _make_Index_names_unique)[0]
+        return prepostOrderPathPassback(root[0], _pre_func, _make_Index_names_unique, path=[0])[0]

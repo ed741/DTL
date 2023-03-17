@@ -109,7 +109,7 @@ def func3():
     l = Index("l")
     
     expr = Lambda([TA := (vsI * vsJ * vsJ).new("TA"), TB := (vsI * vsJ * vsJ).new("TB"), TC := (vsJ * vsJ).new("TC")],
-                  ((TA[i, j, k] * TA[i, k, j] * TC[k, j]).forall(i, j)[l].forall(l)[i] * TA[i, j, k]).forall(j, k))
+                  ((IndexSum(TA[l,j,k] * TA[l,j,k], [l]) * IndexSum(TA[i,j,k] * TA[i,j,k], [i])).forall(k)))
     expr2 = make_Index_names_unique(expr)
     visualise.plot_dag(expr2, view=True, coalesce_duplicates=True)
     # visualise.plot_network(expr.tensor_expr.scalar_expr.scalar_expr.lhs.tensor_expr, view=True)

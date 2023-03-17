@@ -1,18 +1,15 @@
 import abc
 import typing
+from abc import ABC
+from typing import Dict
 
 import dtl
-import dtl.dag_ext_non_scalar as nddtl
 import itertools
 import functools
 import numpy as np
 
-from dtl import Node
-from dtlutils import visualise
-from dtlutils.names import make_Index_names_unique, make_Index_names_unique_CSE
-
-from dtlutils.traversal import path_id
-
+from dtl import Node, DTLType
+from dtlutils import visualise, traversal
 
 class ExpressionNode(abc.ABC):
     @abc.abstractmethod
@@ -35,7 +32,7 @@ class ExprIndexed(ExpressionNode):
         return f"{self.expr.code()}[{','.join(self.indices)}]"
     
     def do(self, args: typing.Dict[str, typing.Any]):
-        idx = tuple(args[i] for i in self.indices)
+        idx = tuple(slice(None) if i == ':' else args[i] for i in self.indices)
         return self.expr.do(args)[idx]
 
 # class ExprTensor(ExpressionNode):
@@ -135,16 +132,30 @@ class CodeNode(abc.ABC):
 
 
 class Func():
-    def __init__(self, child: CodeNode, results: typing.List[str]):
+    def __init__(self, args, child: CodeNode, results):
+        self.args = args
         self.child = child
         self.results = results
     
     def do(self, **kwargs):
+        if any(a not in kwargs for a in self.args):
+            raise ValueError(f"Arguments not satisfied.\n Provided: {str(kwargs)}\n needed: {self.args}")
         self.child.do(kwargs)
-        return tuple([kwargs[n] for n in self.results])
+        return traversal.forAllOperands(self.results, lambda e: e.do(kwargs))
     
     def code(self):
-        return self.child.code(0)
+        def ret(e):
+            if isinstance(e, ExpressionNode):
+                return e.code()
+            elif isinstance(e, tuple):
+                return f"({','.join([ret(c) for c in e])})"
+            else: raise ValueError("Internal Compiler Error: Return type is not ExpressionNode or tupleTree")
+            
+        instructions = []
+        instructions.append(f"def func({','.join(self.args)}):")
+        instructions.append(self.child.code(1))
+        instructions.append(f"    return {ret(self.results)}")
+        return "\n".join(instructions)
         
         
 class Loop(CodeNode):
@@ -162,6 +173,7 @@ class Loop(CodeNode):
         for i in range(self.extent):
             args[self.index] = i
             self.child.do(args)
+            args.pop(self.index)
 
 
 class SeqNode(CodeNode):
@@ -192,7 +204,7 @@ class AssignTensor(CodeNode):
         return f"{'    '*indent}{self.lhs_name}[{','.join(self.lhs_indices)}]={self.rhs.code()}"
 
     def do(self, args: typing.Dict[str, typing.Any]):
-        args[self.lhs_name][tuple(args[i] for i in self.lhs_indices)] = self.rhs.do(args)
+        args[self.lhs_name][tuple(slice(None) if i == ':' else args[i] for i in self.lhs_indices)] = self.rhs.do(args)
 
 
 class AssignTemp(CodeNode):
@@ -256,299 +268,390 @@ class NameGenerator:
         self._suffix = suffix
         self._counter = itertools.count()
     
-    def next(self):
-        return f"{self._prefix}{next(self._counter)}{self._suffix}"
+    def next(self, include=""):
+        return f"{self._prefix}{include}{next(self._counter)}{self._suffix}"
 
-class PythonDtlNode(Node):
-    def get_expression(self, kernelBuilder):
+class PythonDtlNode(Node, ABC):
+    def get_expression(self, kernelBuilder: "KernelBuilder", indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
         pass # return CodeNode, ExpressionNode
     
-    def collect_bits(self, kernelBuilder, path, **kwargs):
-        for child in self.operands:
-            kernelBuilder._collect_bits(child, path + [path_id(self, child)])
+    def get_inputs(self, kernelBuilder: "KernelBuilder"):
+        s = frozenset()
+        for child in traversal.allOperands(self.operands):
+            child_inputs = kernelBuilder.get_inputs(child)
+            s = s.union(child_inputs)
+        return s
+
+            
+class InstantiationExprNode(dtl.Expr):
+    fields = dtl.Expr.fields | {"expr"}
+    
+    def __init__(self, expr: dtl.ExprTypeHint, **kwargs):
+        expr = dtl.Expr.exprInputConversion(expr)
+        super().__init__(expr=expr)
+    @property
+    def type(self) -> DTLType:
+        return self.expr.type
+
+    @property
+    def operands(self):
+        return {"expr":self.expr}
+
+    def with_operands(self, operands: Dict):
+        return self.copy(expr=operands["expr"])
+    
+    def __str__(self):
+        return "{{"+str(self.expr)+"}}"
+
+    def shortStr(self) -> str:
+        return "{{" + self.expr.terminalShortStr() + "}}"
+
+
+class SequenceExprNode(dtl.Expr):
+    fields = dtl.Expr.fields | {"expr", "pre"}
+    
+    def __init__(self, pre: dtl.ExprTypeHint, expr: dtl.ExprTypeHint, **kwargs):
+        pre = dtl.Expr.exprInputConversion(pre)
+        expr = dtl.Expr.exprInputConversion(expr)
+        DTLType.checkCommonIndices([expr.type, pre.type])
+        if len(pre.type.indices - expr.type.indices)>0:
+            raise ValueError(f"pre-expr {pre.type} must not use indices that are not in use in expr: {expr.type}")
+        super().__init__(expr=expr, pre=pre)
+    
+    @property
+    def type(self) -> DTLType:
+        return self.expr.type
+    
+    @property
+    def operands(self):
+        return {"expr": self.expr, "pre": self.pre}
+    
+    def with_operands(self, operands: Dict):
+        return self.copy(expr=operands["expr"], pre=operands["pre"])
+    
+    def __str__(self):
+        return "{|" + str(self.pre) + "|" + str(self.expr) + "|}"
+    
+    def shortStr(self) -> str:
+        return "{|" + self.pre.terminalShortStr() + "|" + self.expr.terminalShortStr() + "|}"
+
+
+class IndexRebinding(dtl.Expr):  # [...] -> <...>... , {b:B} => [...b:B] -> <...>...
+    fields = dtl.Expr.fields | {"expr", "outer_indices", "inner_indices"}
+    
+    def __init__(self, expr: dtl.ExprTypeHint, outer_indices: typing.Sequence[dtl.Index], inner_indices: typing.Sequence[dtl.Index], **kwargs):
+        expr = dtl.Expr.exprInputConversion(expr)
+        if len(outer_indices) != len(inner_indices):
+            raise ValueError(
+                f"IndexReBinding, every outer index given must map to an inner index - outer indices Sequence and inner indices Sequence have different lengths!:\n"
+                f"  outer indices:[{','.join([str(i) for i in outer_indices])}]\n"
+                f"  inner indices:[{','.join([str(i) for i in inner_indices])}]\n")
+        if len(inner_indices) != len(set(inner_indices)):
+            raise ValueError(
+                f"IndexReBinding, cannot bind indices multiple times! there are duplicates in inner indices: [{','.join([str(i) for i in inner_indices])}]"
+            )
+        exprType = expr.type
+        for i_out, i_in in zip(outer_indices, inner_indices):
+            if exprType.spaceOf(i_in) != None and not i_in in outer_indices:
+                raise ValueError(
+                    f"IndexReBinding cannot declare index {str(i_in)}:{str(exprType.spaceOf(i_in))} already found in expr with type {str(exprType)}")
+            if exprType.spaceOf(i_out) == None:
+                raise ValueError(
+                    f"IndexReBinding cannot redeclare index {str(i_out)}:{str(exprType.spaceOf(i_out))} not found in expr with type {str(exprType)}")
+        
+        if "spaces" in kwargs:
+            print("huh")
+        super().__init__(expr=expr, outer_indices=tuple(outer_indices), inner_indices=tuple(inner_indices), **kwargs)
+    
+    @property
+    def type(self) -> DTLType:
+        exprType = self.expr.type
+        args = exprType.args
+        spaces = []
+        for i_out in self.outer_indices:
+            spaces.append(exprType.spaceOf(i_out))
+            args.pop(i_out)
+        for i_in, space in zip(self.inner_indices, spaces):
+            args[i_in] = space
+        return exprType.withArgs(args)
+    
+    @property
+    def operands(self):
+        return {"expr": self.expr, "outer_indices": self.outer_indices, "inner_indices": self.inner_indices}
+    
+    def with_operands(self, operands: Dict):
+        return self.copy(expr=operands["expr"], outer_indices=operands["outer_indices"], inner_indices=operands["inner_indices"])
+    
+    def __str__(self):
+        return f"{str(self.expr)}{{{','.join([str(i) + '->' + str(s) for i, s, in zip(self.outer_indices, self.inner_indices)])}}}"
+    
+    def shortStr(self) -> str:
+        return f"{self.expr.terminalShortStr()}{{{','.join([str(i) + '->' + str(s) for i, s, in zip(self.outer_indices, self.inner_indices)])}}}"
+
 
 class KernelBuilder:
-    def __init__(self, expr):
-        if isinstance(expr, typing.Iterable):
-            expr = list(expr)
-        else:
-            expr = [expr]
+    def __init__(self, expr: dtl.Expr):
         self._expr = expr
-        self.domains = []
-        self.instructions = []
-        self.codeNodes = []
-        self.kernel_data = []
+        self.codeNode = None
         self.registered_tensor_variables = {}
-        self._namer = NameGenerator(prefix="_t_")
+        self.registered_tensor_instantiations = {}
+        self._namer = NameGenerator(prefix="t_")
+        self._index_namer = NameGenerator(prefix="_")
     
     def build(self):
         print("buildA")
-        self._expr = make_Index_names_unique_CSE(self._expr)
-        visualise.plot_dag(self._expr, view=True, label_edges=True)
+        # self._expr = make_Index_names_unique_CSE(self._expr)
+        visualise.plot_dag(self._expr, view=True, label_edges=True, short_strs=True, skip_terminals=True, show_types=True)
+        print(str(self._expr))
         
-        inputs = frozenset()
-        for e in self._expr: inputs = inputs.union(self._get_inputs(e))
-        self.instructions.append(f"def func({','.join(inputs)}):")
-        for i,e in enumerate(self._expr):
-            self._collect_bits(e, [i])
-        self.instructions.append(f"    return {','.join([self.registered_tensor_variables[e][0] for e in self._expr])}")
-        print("Instructions::\n")
-        code = "\n".join(self.instructions)
-        print(code)
-        self.codeNode = Func(SeqNode(self.codeNodes), [self.registered_tensor_variables[e][0] for e in self._expr])
+        tensorInputs = frozenset()
+        indexInputs = {}
+        inputIndexSpaces = {}
+        
+        tensorInputs = tensorInputs.union(self.get_inputs(self._expr))
+        etype  = self._expr.type
+        for i in etype.indices:
+            if i not in indexInputs:
+                indexInputs[i] = i.name #self._index_namer.next("ex_"+i.name+"_")
+                inputIndexSpaces[i] = etype.spaceOf(i)
+            elif etype.spaceOf(i) != inputIndexSpaces[i]:
+                raise ValueError(f"Argument index {i} must act on the same space in all expressions given")
+
+        exprCode, expression = self._get_expression((None,self._expr), indexInputs, tuple())
+
+        self.codeNode = Func(list(tensorInputs) + list(indexInputs.values()), exprCode, expression)
+        print(self.codeNode.code())
         return self.codeNode.do
         
 
 
     @functools.singledispatchmethod
-    def _get_inputs(self, expr):
+    def get_inputs(self, expr):
         s = frozenset()
-        for child in expr.operands:
-            child_inputs = self._get_inputs(child)
+        for child in traversal.allOperands(expr.operands):
+            child_inputs = self.get_inputs(child)
             s = s.union(child_inputs)
         return s
-        # return frozenset.union(frozenset(), (self._get_inputs(child) for child in expr.operands))
     
-    @_get_inputs.register
+    @get_inputs.register
     def _(self, expr: dtl.TensorVariable):
+        tvar_name = expr.name
+        if expr not in self.registered_tensor_variables:
+            shape = expr.type.result
+            self.registered_tensor_variables[expr] = (tvar_name, shape)
         return frozenset([expr.name])
-    #
-    # @functools.singledispatchmethod
-    # def _get_domains(self, expr: dtl.Node):
-    #     return frozenset()
-    #
-    # @_get_domains.register
-    # def _(self, expr: dtl.IndexSum):
-    #     domains = set()
-    #     for idx in expr.sum_indices:
-    #         space = expr.index_spaces[idx]
-    #         if isinstance(space, dtl.UnknownSizeVectorSpace):
-    #             raise NotImplementedError
-    #         size = space.dim
-    #         domain = f"{{ [{idx.name}]: 0 <= {idx.name} < {size} }}"
-    #         domains.add(domain)
-    #     return frozenset(domains) | self._get_domains(expr.scalar_expr)
-    #
-    # @_get_domains.register
-    # def _(self, expr: dtl.ScalarExpr):
-    #     return frozenset.union(*[self._get_domains(child) for child in expr.operands])
-    #
+    
+    @get_inputs.register
+    def _(self, expr: PythonDtlNode):
+        return expr.get_inputs(self)
+
+    
+    def _get_expression(self, labelledExpr: typing.Tuple[typing.Union[str, None], dtl.Expr], indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        l, e = labelledExpr
+        if l is not None:
+            path = (*path, l)
+        if frozenset(indexMap.keys()) != e.type.indices:
+            raise ValueError(
+                f"Internal Compiler Error: Indices map {str(indexMap)} does not match type {str(e.type)} in {str(e)} at path {path}")
+        return self._get_expression_r(e, indexMap, path)
+    
     @functools.singledispatchmethod
-    def _get_expression(self, expr: dtl.ScalarExpr):
+    def _get_expression_r(self, expr: dtl.Expr, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
         """ return tuple:
             (instructions required to produce output. expression that produces output)
             (CodeNode, ExpressionNode)
             """
         raise TypeError
     
-    @_get_expression.register
-    def _(self, expr: dtl.IndexSum):
+    @_get_expression_r.register
+    def _(self, expr: dtl.TensorVariable, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        if expr not in self.registered_tensor_variables:
+            raise ValueError(f"Internal Compiler Error: Cannot use unregistered TensorVariable {str(expr)} at {path}")
+        var, shape = self.registered_tensor_variables[expr]
+        return SeqNode([]), ExprConst(var)
+
+    @_get_expression_r.register
+    def _(self, expr: dtl.IndexBinding, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        newMap = {i:v for i,v in indexMap.items() if i not in expr.indices}
+        return self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)
+
+    def _match_indices_and_subexprs(self, indices, subexpr, indexMap):
+        if isinstance(subexpr, tuple):
+            return tuple([self._match_indices_and_subexprs(i,e, indexMap) for i,e in zip(indices, subexpr)])
+        elif isinstance(subexpr, ExpressionNode):
+            if not isinstance(indices, tuple):
+                raise ValueError("Internal Compiler Error: IndexExpr indices do not match result of subExpr")
+            if len(indices)>0 and not all([isinstance(i, dtl.Index) or i == dtl.NoneIndex for i in indices]):
+                raise ValueError("Internal Compiler Error: IndexExpr indices do not match result of subExpr")
+            return ExprIndexed(subexpr, [':' if i == dtl.NoneIndex else indexMap[i] for i in indices])
+    @_get_expression_r.register
+    def _(self, expr: dtl.IndexExpr, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        inst, subexpr = self._get_expression(traversal.operandLabelled(expr, ["expr"]), indexMap, path)
+        newSubexpr = self._match_indices_and_subexprs(expr.indices, subexpr, indexMap)
+        return inst, newSubexpr
+
+    @_get_expression_r.register
+    def _(self, expr: dtl.MulBinOp, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        lhsIndices = expr.lhs.type.indices
+        lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
+        rhsIndices = expr.rhs.type.indices
+        rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
+        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), lhsIndexMap, path)
+        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), rhsIndexMap, path)
+        return SeqNode([l_sub_inst, r_sub_inst]), ExprMul(l_sub_expression, r_sub_expression)
+    
+    @_get_expression_r.register
+    def _(self, expr: dtl.AddBinOp, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        lhsIndices = expr.lhs.type.indices
+        lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
+        rhsIndices = expr.rhs.type.indices
+        rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
+        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), lhsIndexMap, path)
+        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), rhsIndexMap, path)
+        return SeqNode([l_sub_inst, r_sub_inst]), ExprAdd(l_sub_expression, r_sub_expression)
+
+    @_get_expression_r.register
+    def _(self, expr: dtl.SubBinOp, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        lhsIndices = expr.lhs.type.indices
+        lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
+        rhsIndices = expr.rhs.type.indices
+        rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
+        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), lhsIndexMap, path)
+        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), rhsIndexMap, path)
+        return SeqNode([l_sub_inst, r_sub_inst]), ExprSub(l_sub_expression, r_sub_expression)
+
+    @_get_expression_r.register
+    def _(self, expr: dtl.IndexSum, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
         t_var = self._namer.next()
-        sub_inst, sub_expression = self._get_expression(expr.scalar_expr)
+        newMap = dict(indexMap)
+        for i in expr.sum_indices:
+            newMap[i]=self._index_namer.next(i.name+"_")
+        sub_inst, sub_expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)
         loop = SeqNode([sub_inst,
                         Accumulate(t_var, [], sub_expression)])
+        exprType = expr.expr.type
         for i in expr.sum_indices:
-            loop = Loop(i.name, expr.index_spaces[i].dim, loop)
+            loop = Loop(newMap[i], exprType.spaceOf(i).dim, loop)
 
         sum_inst = SeqNode([AssignTemp(t_var, ExprConst('0')), loop])
         return sum_inst, ExprConst(t_var)
-
-    @_get_expression.register
-    def _(self, expr: dtl.MulBinOp):
-        l_sub_inst, l_sub_expression = self._get_expression(expr.lhs)
-        r_sub_inst, r_sub_expression = self._get_expression(expr.rhs)
-        return SeqNode([l_sub_inst, r_sub_inst]), ExprMul(l_sub_expression, r_sub_expression)
     
-    @_get_expression.register
-    def _(self, expr: dtl.AddBinOp):
-        l_sub_inst, l_sub_expression = self._get_expression(expr.lhs)
-        r_sub_inst, r_sub_expression = self._get_expression(expr.rhs)
-        return SeqNode([l_sub_inst, r_sub_inst]), ExprAdd(l_sub_expression, r_sub_expression)
-
-    @_get_expression.register
-    def _(self, expr: dtl.SubBinOp):
-        l_sub_inst, l_sub_expression = self._get_expression(expr.lhs)
-        r_sub_inst, r_sub_expression = self._get_expression(expr.rhs)
-        return SeqNode([l_sub_inst, r_sub_inst]), ExprSub(l_sub_expression, r_sub_expression)
-    
-    @_get_expression.register
-    def _(self, expr: dtl.IndexedTensor):
-        return SeqNode([]), ExprIndexed(ExprConst(self.registered_tensor_variables[expr.tensor_expr][0]), [i.name for i in expr.tensor_indices])
-    
-    @_get_expression.register
-    def _(self, expr: nddtl.NDScalarExpr):
-        sub_inst, sub_expression = self._get_expression(expr.nd_expr)
-        if len(expr.nd_expr.nd_space_indices) >0:
-            return sub_inst, ExprIndexed(sub_expression, [i.name for i in expr.nd_expr.nd_space_indices])
-        else:
-            return sub_inst, sub_expression
-
-    @_get_expression.register
-    def _(self, expr: nddtl.IndexedNDTensor):
-        # sub_inst, sub_expression = self._get_expression(expr.scalar_expr)
-        # return sub_inst, ExprIndexed(sub_expression, [i.name for i in expr.tensor_indices])
-        # tvar_name = f"P_{'_'.join(str(p) for p in path)}"
-        tvar_name = self._namer.next()
-        inst = [
-            InitTensor(tvar_name, [expr.index_spaces[k].dim for k in expr.tensor_indices])
-        ]
-        expr_inst, expression = self._get_expression(expr.scalar_expr)
-        loop = SeqNode([expr_inst,
-                        AssignTensor(tvar_name, [i.name for i in expr.tensor_indices], expression)])
-        for i in expr.tensor_indices:
-            loop = Loop(i.name, expr.index_spaces[i].dim, loop)
+    def _init_tensor_for_all_tuple(self, exprs, result:dtl.ResultType, subresult:dtl.ResultType, newIndices: typing.List[str]):
+        if isinstance(result, dtl.ShapeType):
+            if not isinstance(subresult, dtl.ShapeType):
+                raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to its child")
+            if not isinstance(exprs, ExpressionNode):
+                raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to expressionNode produced")
+            tvar_name = self._namer.next()
+            return InitTensor(tvar_name, [d.dim for d in result.dims]), AssignTensor(tvar_name, [':' for _ in subresult.dims]+[i for i in newIndices], exprs), ExprConst(tvar_name)
+        
+        elif isinstance(result, dtl.ResultTupleType):
+            if not isinstance(subresult, dtl.ResultTupleType):
+                raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to its child")
+            if not isinstance(exprs, tuple):
+                raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to expressionNode tuple produced")
+            return zip(*[self._init_tensor_for_all_tuple(e,r,s,newIndices) for e,r,s in zip(exprs, result.results, subresult.results)])
+    @_get_expression_r.register
+    def _(self, expr: dtl.DeindexExpr, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        newMap = dict(indexMap)
+        for i in expr.indices:
+            newMap[i]=self._index_namer.next(i.name+"_")
+        newIndices = [newMap[i] for i in expr.indices]
+        sub_inst, sub_expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)
+        inits, acc, exprs = self._init_tensor_for_all_tuple(sub_expression, expr.type.result, expr.expr.type.result, newIndices)
+        allInits = traversal.flattenTupleTreeToList(inits)
+        allAcc = traversal.flattenTupleTreeToList(acc)
+        
+        inst = list(allInits)
+        loop = SeqNode([sub_inst]+allAcc)
+        childtype = expr.expr.type
+        for i in expr.indices:
+            loop = Loop(newMap[i], childtype.spaceOf(i).dim, loop)
         inst.append(loop)
         code = SeqNode(inst)
-        return code, ExprConst(tvar_name)
-
-    @_get_expression.register
-    def _(self, expr: nddtl.MaxNdExprOp):
-        sub_inst, sub_expression = self._get_expression(expr.nd_expr)
-        return sub_inst, ExprNdMax(sub_expression)
-    
-    @_get_expression.register
-    def _(self, expr: nddtl.MatrixInverseNdExprOp):
-        sub_inst, sub_expression = self._get_expression(expr.nd_expr)
-        return sub_inst, ExprNdMatInv(sub_expression)
-    
-    @_get_expression.register
-    def _(self, expr:PythonDtlNode):
-        return expr.get_expression(self)
+        return code, exprs
 
 
-    @_get_expression.register
-    def _(self, expr: dtl.TensorVariable):
-        return TypeError
+    @_get_expression_r.register
+    def _(self, expr: dtl.ExprTuple, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        tIndices = [e.type.indices for e in expr.exprs]
+        tIndexMaps = [{i: v for i,v in indexMap.items() if i in idxs} for idxs in tIndices]
+        tSubInsts, tSubExprs = zip(*[self._get_expression(traversal.operandLabelled(expr, ["exprs", i]), idxMap, path) for (i,e), idxMap in zip(enumerate(expr.exprs), tIndexMaps)])
+        return SeqNode(tSubInsts), tuple(tSubExprs)
+
+    @_get_expression_r.register
+    def _(self, expr: dtl.IndexedExprTuple, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        subInst, subExprs = self._get_expression(traversal.operandLabelled(expr, ["expr"]), indexMap, path)
+        return subInst, subExprs[expr.n]
     
-    @_get_expression.register
-    def _(self, expr: dtl.deIndex):
-        return TypeError
-    
-    @functools.singledispatchmethod
-    def _collect_bits(self, expr, path, **kwargs):
-        for child in expr.operands:
-            self._collect_bits(child, path + [path_id(expr, child)])
-    
-    @_collect_bits.register
-    def _(self, expr: dtl.deIndex, path, **kwargs):
-        tvar_name = f"P_{'_'.join(str(p) for p in path)}"
-        print(f"build deIndex: {tvar_name}")
-        if expr in self.registered_tensor_variables:
-            print(f"{tvar_name} already built as {self.registered_tensor_variables[expr]}")
+    @_get_expression_r.register
+    def _(self, expr:PythonDtlNode, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        return expr.get_expression(self, indexMap, path)
+
+    def _make_InstantiationExprNode_init_tensors(self, result: dtl.ResultType):
+        if isinstance(result, dtl.ShapeType):
+            tvar_name = self._namer.next()
+            return tvar_name, InitTensor(tvar_name, [d.dim for d in result.dims])
+        elif isinstance(result, dtl.ResultTupleType):
+            names, codes = zip(*[self._make_InstantiationExprNode_init_tensors(r) for r in result.results])
+            return tuple(names), SeqNode(codes)
+
+    def _make_InstantiationExprNode_assign_tensors(self, names, expressions):
+        if isinstance(expressions, ExpressionNode):
+            return AssignTemp(names, expressions), ExprConst(names)
+        elif isinstance(expressions, tuple):
+            assigns, subNames = zip(
+                *[self._make_InstantiationExprNode_assign_tensors(n, e) for n, e in zip(names, expressions)])
+            return SeqNode(assigns), tuple(subNames)
+
+    @_get_expression_r.register
+    def _(self, expr: InstantiationExprNode, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str, ...],
+          **kwargs):
+        exprType = expr.type
+        tvar_comment_name = f"P_{''.join(str(p) for p in path)}"
+        print(f"build Instantiation:    {tvar_comment_name}")
+        freeIdxs = list(exprType.indices)
+        scopes = [traversal.get_scope(self._expr, i, path) for i in freeIdxs]
+        scopePairs = frozenset([(idx, tuple(s)) for idx, s in zip(freeIdxs, scopes)])
+        key = (expr, scopePairs)
+        if key in self.registered_tensor_instantiations:
+            name, shape, expressions = self.registered_tensor_instantiations[key]
+            info = f"Skipping Instantiation: {tvar_comment_name} already built as {name} : {shape} : {traversal.forallTupleTreeFold(expressions, lambda e: e.code(), tuple)}"
+            print(info)
+            return SeqNode([CodeComment(info)]), expressions
         else:
-            self.registered_tensor_variables[expr] = (tvar_name, shape_from_TensorExpr(expr))
-            
-            # ensure tensors we rely on exist
-            self._collect_bits(expr.scalar_expr, path + [path_id(expr, expr.scalar_expr)])
-            
             # Init Np array for output
-            inst = [
-                InitTensor(tvar_name, [expr.index_spaces[k].dim for k in expr.indices])
-            ]
+            names, inst = self._make_InstantiationExprNode_init_tensors(exprType.result)
+        
+            print(f"building Instantiation: {tvar_comment_name} into {names}")
             # generate the inner expressions
-            expr_inst, expression = self._get_expression(expr.scalar_expr)
-            loop = SeqNode([expr_inst,
-                            AssignTensor(tvar_name, [i.name for i in expr.indices], expression)])
-            # generate loops to fill the output
-            for i in expr.indices:
-                loop = Loop(i.name, expr.index_spaces[i].dim, loop)
-            
-            inst.append(loop)
-            code = SeqNode(inst)
-            self.instructions.append(code.code(1))
-            self.codeNodes.append(code)
+            expr_inst, expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), indexMap, path)
+        
+            assigns, outputExpressions = self._make_InstantiationExprNode_assign_tensors(names, expression)
+        
+            code = SeqNode(
+                [CodeComment(f"Init for {tvar_comment_name} :: {exprType} as {names}"), inst, CodeComment("do Subexp"), expr_inst,
+                 CodeComment(f"assign {names}"), assigns, CodeComment(f"Done {tvar_comment_name} -> {names}")])
+            # self.instructions.append(code.code(1))
+            # self.codeNodes.append(code)
+            self.registered_tensor_instantiations[key] = (tvar_comment_name, exprType.result, outputExpressions)
+            print(
+                f"built Instantiation:    {tvar_comment_name} : {str(exprType)} : {traversal.forallTupleTreeFold(outputExpressions, lambda e: e.code(), tuple)}")
+            return code, outputExpressions
     
-    @_collect_bits.register
-    def _(self, tensor_variable: dtl.TensorVariable, path, **kwargs):
-        tvar_name = tensor_variable.name
-        if tensor_variable not in self.registered_tensor_variables:
-            shape = shape_from_TensorExpr(tensor_variable)
-            self.registered_tensor_variables[tensor_variable] = (tvar_name, shape)
+    @_get_expression_r.register
+    def _(self, expr: SequenceExprNode, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str, ...],
+          **kwargs):
+        preIndices = expr.pre.type.indices
+        preIndexMap = indexMap#{i: v for i, v in indexMap.items() if i in preIndices}
+        pre_expr_inst, pre_expression = self._get_expression(traversal.operandLabelled(expr, ["pre"]), preIndexMap, path)
+        expr_inst, expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), indexMap, path)
+        throwing = ','.join([e.code() for e in traversal.flattenTupleTreeToList(pre_expression)])
+        return SeqNode([pre_expr_inst, expr_inst, CodeComment("Throwing away: "+throwing)]), expression
     
-    
-    @_collect_bits.register
-    def _(self, expr:PythonDtlNode, path, **kwargs):
-        return expr.collect_bits(self, path, **kwargs)
-    
-    # @_collect_bits.register
-    # def _(self, expr: nddtl.NDScalarExpr, path, **kwargs):
-    #     tvar_name = f"P_{'_'.join(str(p) for p in path)}"
-    #     print(f"build NDScalarExpr: {tvar_name}")
-    #     if expr in self.registered_tensor_variables:
-    #         print(f"{tvar_name} already built as {self.registered_tensor_variables[expr]}")
-    #     else:
-    #         self.registered_tensor_variables[expr] = (tvar_name, shape_from_TensorExpr(expr))
-    #
-    #         # ensure tensors we rely on exist
-    #         self._collect_bits(expr.scalar_expr, path + [path_id(expr, expr.scalar_expr)])
-    #
-    #         # Init Np array for output
-    #         inst = [
-    #             InitTensor(tvar_name, [expr.index_spaces[k].dim for k in expr.indices])
-    #         ]
-    #         # generate the inner expressions
-    #         expr_inst, expression = self._get_expression(expr.scalar_expr)
-    #         loop = SeqNode([expr_inst,
-    #                         AssignTensor(tvar_name, [i.name for i in expr.indices], expression)])
-    #         # generate loops to fill the output
-    #         for i in expr.indices:
-    #             loop = Loop(i.name, expr.index_spaces[i].dim, loop)
-    #
-    #         inst.append(loop)
-    #         code = SeqNode(inst)
-    #         self.instructions.append(code.code(1))
-    #         self.codeNodes.append(code)
-    #
-
-def shape_from_TensorExpr(expr: dtl.TensorExpr):
-    shape = []
-    for v_space in expr.space.spaces:
-        if isinstance(v_space, dtl.UnknownSizeVectorSpace):
-            raise NotImplementedError
-        shape.append(v_space.dim)
-    shape = tuple(shape)
-    return shape
-    
-    # @_collect_bits.register
-    # def _(self, index_sum: dtl.IndexSum, path, **kwargs):
-    #     print("build IndexSum")
-    #     # for index in index_sum.sum_indices:
-    #     #     #iname = f"{index.name}.{_get_scope(index, expr, path, root)}"
-    #     #     iname = index_name(index, path)  # placeholder
-    #     #
-    #     #
-    #     #     if isinstance(index_sum.index_spaces[index], dtl.UnknownSizeVectorSpace):
-    #     #         raise NotImplementedError
-    #     #
-    #     #     size = index_sum.index_spaces[index].dim #if isinstance(expr.tensor_spaces[index], RealVectorSpace)
-    #     #     # if small
-    #     #         # size = "5"
-    #     #     # else:
-    #     #         # param_name = "myuniqueparam"
-    #     #         # size = param_name
-    #     #         # param = lp.ValueArg(param_name, dtype=np.int32)
-    #     #         # self.kernel_data.append(param)
-    #     #
-    #     #     domain = f"{{ [{iname}]: 0 <= {iname} < {size} }}"
-    #     #     self.domains.append(domain)
-    #
-    #     # B[i, j]
-    
-    #     #Assume:
-    #     #index_sum.scalar_expr is IndexedTensor
-    #     #index_sum.scalar_expr.tensor_expr is TensorVariable
-    #     indexed_tensor = index_sum.scalar_expr
-    #     tvar_name = indexed_tensor.tensor_expr.name  # B
-    #     indices = tuple(pym.var(index_name(idx, get_scope(self._expr, idx, path))) for idx in indexed_tensor.tensor_indices)  # (i, j)
-    #     expression = pym.subscript(pym.var(tvar_name), indices) #B[i,j]
-    #
-    #     # register B
-    
-    #     shape = tuple(indexed_tensor.index_spaces[idx].dim for idx in indexed_tensor.indices)
-    #     tvar = lp.GlobalArg(tvar_name, dtype=np.float64, shape=shape)
-    #     self.kernel_data.append(tvar)
-    #
-    #
-    #     within_inames = frozenset({index_name(idx, get_scope(self._expr, idx, path)) for idx in indexed_tensor.tensor_indices})  # (i, j)indexed_tensor.tensor_  # {i, j}
-    #     return expression, within_inames
-
+    @_get_expression_r.register
+    def _(self, expr: IndexRebinding, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        newMap = {i:v for i,v in indexMap.items() if i not in expr.inner_indices}
+        for i_out, i_in in zip(expr.outer_indices, expr.inner_indices):
+            newMap[i_out] = indexMap[i_in]
+        return self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)

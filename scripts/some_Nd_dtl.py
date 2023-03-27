@@ -4,8 +4,9 @@ from dtl.dag_ext_non_scalar import *
 from dtlpp.backends.native import KernelBuilder
 
 dag_ext_non_scalar_init()
-from dtlutils import visualise, ndVisualise
-from dtlutils.names import make_Index_names_unique
+from dtl.dtlutils import visualise
+from dtl.dtlutils import ndVisualise
+from dtl.passes.names import make_Index_names_unique
 
 
 def func1():

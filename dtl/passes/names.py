@@ -1,10 +1,10 @@
 import itertools
 import typing
-from typing import Iterable, List
+from typing import List
 
 import dtl
 from dtl import Node, Index
-from dtlutils.traversal import postOrderPath, get_scope, node_from_path, prepostOrderPathPassback, allOperands
+from dtl.dtlutils.traversal import postOrderPath, get_scope, prepostOrderPathPassback, allOperands
 
 
 class NameGenerator:

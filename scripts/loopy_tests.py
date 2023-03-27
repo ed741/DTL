@@ -1,10 +1,10 @@
 from dtl import *
-from dtl.dag import RealVectorSpace, Index, Lambda
+from dtl.dag import RealVectorSpace, Index
 from dtlpp.backends.loopy import KernelBuilder
 import loopy as lp
 import numpy as np
 
-from dtlutils import visualise
+from dtl.dtlutils import visualise
 
 v5 = RealVectorSpace(5)
 v9 = RealVectorSpace(9)
@@ -22,7 +22,7 @@ B = (v7*v5).new("B")
 C = (v7*v3).new("C")
 C_TT1 = C[i,j].forall(i,j)
 C_TT2 = C[i,j].forall(i,j)
-expr = (((A[i,j] + (B[k,i] * (C_TT1)[k,p]).sum(k)).forall(j,p))[i,j]*(C_TT2)[k,j]).forall(i,k)
+expr = (((A[i,j] + (B[k,i] * (C_TT1)[k,p]).sum(k)).forall(j,p))[p,j]*(C_TT2)[k,j]).forall(i,k)
 expr = (C[i,j]+4).forall(i,j)
 print("loopy_test.2")
 visualise.plot_dag(expr, view=True, label_edges=True)

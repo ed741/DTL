@@ -2,7 +2,7 @@ import graphviz
 
 import dtl
 from dtl import *
-from dtlutils.traversal import postOrderPath, get_scope, allOperandsLabelled
+from dtl.dtlutils.traversal import postOrderPath, get_scope, allOperandsLabelled
 
 
 def plot_dag(expr: typing.Union[dtl.Node, typing.Iterable[dtl.Node]], *, name="expression",
@@ -76,12 +76,18 @@ def plot_network(expr: dtl.Expr, *, name="expression", view=False, **kwargs):
 def _plot_network(expr: dtl.Expr, network):
     names = {}
     def add_vars(node, path):
+        path = tuple(path)
         if isinstance(node, Index):
             name = f"I.{path}"
-            scope = tuple(get_scope(expr, node, path))
-            if not (node,scope) in names:
-                names[(node, scope)] = name
-                network.node(name, label=node.name, shape='circle')
+            scope = get_scope(expr, node, path)
+            if scope is None:
+                scope = tuple()
+            else:
+                scope = tuple(scope)
+            if scope is None or (not (node,tuple(scope)) in names):
+                network.node(name, label=node.name, shape='diamond' if scope is None else 'circle')
+                if scope is not None:
+                    names[(node, tuple(scope))] = name
         if isinstance(node, TensorVariable):
             name = f"TV.{path}"
             names[(node,path)] = name

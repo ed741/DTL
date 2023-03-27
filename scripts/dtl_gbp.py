@@ -3,11 +3,12 @@ import typing
 import numpy as np
 
 import dtl
-from dtl import Expr, Index, RealVectorSpace, TensorVariable, IndexSum, ExprTuple, DTLType
+from dtl import Expr, Index, RealVectorSpace, TensorVariable, IndexSum, DTLType
 from dtlpp.backends import native
 from dtlpp.backends.native import PythonDtlNode, KernelBuilder, CodeComment, SeqNode, ExprConst, CodeNode, \
     ExpressionNode
-from dtlutils import visualise, traversal, optimise
+from dtl.dtlutils import visualise, traversal
+from dtl.passes import optimise
 
 
 class MarginaliseFactor(dtl.Expr, PythonDtlNode):

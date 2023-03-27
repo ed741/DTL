@@ -1,7 +1,7 @@
 import abc
 import typing
 import numbers
-from typing import List, Iterable, Union, Dict, Any, Sequence
+from typing import List, Iterable, Union, Dict, Any, Sequence, Set
 from inspect import currentframe, getframeinfo
 
 import pytools
@@ -248,22 +248,14 @@ class TensorSpace(Node):
         return TensorVariable(self, name)
 
 
-# class ArgType():
-#     def __init__(self, i: Index,  v: VectorSpaceVariable):
-#         self.i = i
-#         self.v = v
-#
-#     def __str__(self):
-#         if self.i is not None:
-#             return f"{str(self.i)}:{str(self.v)}"
-#         else:
-#             return f"{str(self.v)}"
+DeindexFormatTypeHint = typing.Union[typing.Tuple["DeindexFormatTypeHint",...], typing.Tuple[typing.Union[Index, VectorSpaceVariable]]]
 
 class ResultType(abc.ABC):
     @abc.abstractmethod
-    def withExtraDims(self, new_dims: Iterable[VectorSpaceVariable]):
+    def withExtraDims(self, new_dims: Iterable[Index]) -> DeindexFormatTypeHint:
         pass
-    
+
+
     @abc.abstractmethod
     def __str__(self):
         pass
@@ -292,11 +284,11 @@ class ShapeType(ResultType):
     def __init__(self, dims: List[VectorSpaceVariable]):
         self.dims = tuple(dims)
     
-    def withExtraDims(self, new_dims: Iterable[VectorSpaceVariable]):
+    def withExtraDims(self, new_dims: Iterable[Index]) -> DeindexFormatTypeHint:
         d = list(self.dims)
         d.extend(new_dims)
-        return ShapeType(d)
-    
+        return tuple(d)
+
     def __str__(self):
         return f"<{','.join([str(d) for d in self.dims])}>"
     
@@ -336,8 +328,8 @@ class ResultTupleType(ResultType):
     def __init__(self, results: Sequence[ResultType]):
         self.results = tuple(results)
     
-    def withExtraDims(self, new_dims: Iterable[VectorSpaceVariable]):
-        return ResultTupleType([r.withExtraDims(new_dims) for r in self.results])
+    def withExtraDims(self, new_dims: Iterable[Index]) -> DeindexFormatTypeHint:
+        return tuple([r.withExtraDims(new_dims) for r in self.results])
     
     def __str__(self):
         return '(' + ','.join([str(r) for r in self.results]) + ')'
@@ -535,7 +527,9 @@ class Expr(Node, abc.ABC):
             raise ValueError("Cannot make tuple from expr with type " + str(self.type))
     
     def forall(self, *indices: Index) -> "DeindexExpr":
-        return DeindexExpr(self, indices)
+        exprType = self.type
+        output_shape =  exprType.result.withExtraDims(indices)
+        return DeindexExpr(self, output_shape)
     
     def sum(self, *indices: Index) -> "IndexSum":
         return IndexSum(self, indices)
@@ -637,7 +631,8 @@ class IndexExpr(Expr):  # [a:A...] -> <A...>... , [[a..],...] => [a:A...] -> <..
     @staticmethod
     def checkIndexingPattern(exprType: DTLType,
                              indices: Union[Sequence, Index, ConstInt, int, _NoneIndex],
-                             shapes: Union[ResultType, VectorSpaceVariable]):
+                             shapes: Union[ResultType, VectorSpaceVariable],
+                             expr: Expr):
         if isinstance(shapes, VectorSpaceVariable):
             space = shapes
             # Base case for individual Dims
@@ -648,10 +643,10 @@ class IndexExpr(Expr):  # [a:A...] -> <A...>... , [[a..],...] => [a:A...] -> <..
                 # If they have used an Index check it's space
                 idxSpace = exprType.spaceOf(index)
                 if idxSpace is None:
-                    raise ValueError(f"IndexExpr index ({str(index)}) must be an argument in Expr type {exprType}")
+                    raise ValueError(f"IndexExpr index ({str(index)}) must be an argument in Expr type {exprType}, in {expr}")
                 elif idxSpace != space:
                     raise ValueError(
-                        f"IndexExpr index ({str(index)}) has space {str(idxSpace)} but is indexing {str(space)} in the expr with type {exprType}")
+                        f"IndexExpr index ({str(index)}) has space {str(idxSpace)} but is indexing {str(space)} in the expr with type {exprType}, in {expr}")
                 else:
                     return index
             if isinstance(indices, int):
@@ -660,33 +655,33 @@ class IndexExpr(Expr):  # [a:A...] -> <A...>... , [[a..],...] => [a:A...] -> <..
                 i = indices
                 # if they have used a ConstInt check it's in bounds (if possible to check)
                 if isinstance(space, VectorSpace) and space.dim <= i.value:
-                    raise ValueError(f"Cannot index space {str(space)} with int {str(i)}")
+                    raise ValueError(f"Cannot index space {str(space)} with int {str(i)}, in {expr}")
                 else:
                     return i
-            raise ValueError(f"Cannot index {str(space)} with {str(indices)}, index must be Index or ConstInt (or int)")
+            raise ValueError(f"Cannot index {str(space)} with {str(indices)}, index must be Index or ConstInt (or int), in {expr}")
         if isinstance(shapes, ShapeType):
             shape = shapes
             if isinstance(indices, Sequence):
                 if len(indices) != shape.nDims:
                     raise ValueError(
-                        f"Cannot index space {str(shape)} with {str(indices)}, number of dimensions must match")
+                        f"Cannot index space {str(shape)} with {str(indices)}, number of dimensions must match, in {expr}")
                 return tuple(
-                    [IndexExpr.checkIndexingPattern(exprType, idx, dims) for idx, dims in zip(indices, shape.dims)])
-            raise ValueError(f"Cannot index {str(shape)} with {str(indices)}, indices must be a Sequence (list/tuple)")
+                    [IndexExpr.checkIndexingPattern(exprType, idx, dims, expr) for idx, dims in zip(indices, shape.dims)])
+            raise ValueError(f"Cannot index {str(shape)} with {str(indices)}, indices must be a Sequence (list/tuple), in {expr}")
         if isinstance(shapes, ResultTupleType):
             if isinstance(indices, Sequence):
                 if len(indices) != shapes.tupleSize:
                     raise ValueError(
-                        f"Cannot index space {str(shapes)} with {str(indices)}, number of dimensions must match")
+                        f"Cannot index space {str(shapes)} with {str(indices)}, number of dimensions must match, in {expr}")
                 return tuple(
-                    [IndexExpr.checkIndexingPattern(exprType, idx, dims) for idx, dims in zip(indices, shapes.results)])
-            raise ValueError(f"Cannot index {str(shapes)} with {str(indices)}, indices must be a Sequence (list/tuple)")
-        raise ValueError("Shapes must be of type ResultType")
+                    [IndexExpr.checkIndexingPattern(exprType, idx, dims, expr) for idx, dims in zip(indices, shapes.results)])
+            raise ValueError(f"Cannot index {str(shapes)} with {str(indices)}, indices must be a Sequence (list/tuple), in {expr}")
+        raise ValueError("Shapes must be of type ResultType, in {expr}")
     
     def __init__(self, expr: ExprTypeHint, indices: Union[Index, ConstInt, int, Sequence], **kwargs):
         expr = Expr.exprInputConversion(expr)
         exprType = expr.type
-        indices = IndexExpr.checkIndexingPattern(exprType, indices, exprType.result)
+        indices = IndexExpr.checkIndexingPattern(exprType, indices, exprType.result, expr)
         super().__init__(expr=expr, indices=indices, **kwargs)
     
     # We assume a well-formed indices argument here as it should have already been checked by checkIndexingPattern
@@ -891,42 +886,122 @@ class IndexSum(Expr):  # [a:A...] -> <...>... , [a..] => [...] -> <...>...
         return index in self.sum_indices
 
 
-# DeindexFormatTypeHint = typing.Union[typing.Tuple["DeindexFormatTypeHint",...], Index, VectorSpaceVariable]
-
 class DeindexExpr(Expr):
-    fields = Expr.fields | {"expr", "indices"}
+    fields = Expr.fields | {"expr", "output_shape"}
     
-    def __init__(self, expr: ExprTypeHint, indices: Sequence[Index], **kwargs):
+    @staticmethod
+    def getIndices(output_shape: DeindexFormatTypeHint):
+        if isinstance(output_shape, tuple):
+            return {i for idxs in output_shape for i in DeindexExpr.getIndices(idxs)}
+        if isinstance(output_shape, Index):
+            return {output_shape}
+        return set()
+    
+    @staticmethod
+    def checkDeindexingPattern(exprType: DTLType,
+                             output_shape: DeindexFormatTypeHint,
+                             shapes: Union[ResultType, VectorSpaceVariable],
+                               og_output_shape: DeindexFormatTypeHint = None):
+        if og_output_shape is None: og_output_shape = output_shape
+        if isinstance(shapes, ShapeType):
+            shape = shapes
+            # Base case for individual Tensor
+            if not isinstance(output_shape, tuple):
+                raise ValueError(f"Cannot Deindex shape: {str(shape)} as {str(output_shape)} in {str(exprType.result)} Deindexed as {str(og_output_shape)}")
+            if len(output_shape) < shape.nDims:
+                raise ValueError(f"Cannot Deindex shape: {str(shape)} as ({','.join(str(i) for i in output_shape)}) in {str(exprType.result)} Deindexed as {str(og_output_shape)}")
+            s = 0
+            i = 0
+            while i < len(output_shape):
+                if isinstance(output_shape[i], VectorSpaceVariable):
+                    if output_shape[i] != shape.dims[s]:
+                        raise ValueError(f"Deindex Vectorspace mismatch: {str(output_shape[i])} is not {str(shape.dims[s])} in {str(exprType.result)} Deindexed as {str(og_output_shape)}")
+                    s += 1
+                    i += 1
+                elif isinstance(output_shape[i], Index):
+                    if output_shape[i] not in exprType.indices:
+                        raise ValueError(f"Cannot Deindex along index {output_shape[i]} that is not free in the expression of type: {str(exprType)}")
+                    i+=1
+                else:
+                    raise ValueError(f"Cannot use {str(output_shape[i])} to Deindex in {str(exprType.result)} Deindexed as {str(og_output_shape)}")
+            if s != shape.nDims:
+                raise ValueError(f"Dimensions in {output_shape} do not match {shape} in {str(exprType.result)} Deindexed as {str(og_output_shape)}")
+        elif isinstance(shapes, ResultTupleType):
+            if isinstance(output_shape, Sequence):
+                if len(output_shape) != shapes.tupleSize:
+                    raise ValueError(
+                        f"Cannot deindex space {str(shapes)} with {str(output_shape)}, number of tensors must match; in {str(exprType.result)} Deindexed as {str(og_output_shape)}")
+                for child_shape, child_result in zip(output_shape, shapes.results):
+                    DeindexExpr.checkDeindexingPattern(exprType, child_shape, child_result, og_output_shape = og_output_shape)
+            else:
+                raise ValueError(
+                    f"Cannot deindex {str(shapes)} with {str(output_shape)}, indices must be a Sequence (list/tuple)")
+        else:
+            raise ValueError("Shapes must be of type ResultType")
+    
+    def __init__(self, expr: ExprTypeHint, output_shape: DeindexFormatTypeHint, **kwargs):
         expr = Expr.exprInputConversion(expr)
         exprType = expr.type
-        unfreeIndices = set(indices).difference(exprType.indices)
+        
+        DeindexExpr.checkDeindexingPattern(exprType, output_shape, exprType.result)
+        
+        unfreeIndices = set(DeindexExpr.getIndices(output_shape)).difference(exprType.indices)
         if len(unfreeIndices) > 0:
             raise ValueError(
                 f"Cannot Deindex along indices [{','.join(str(i) for i in unfreeIndices)}] that are not free in the expression of type: {str(exprType)} in expression {expr}")
         # if set(indices) != set(exprType.indices):
         #     expr = IndexSum(expr, tuple(set(exprType.indices) - set(indices)), attrs={"AutoGenerated": True})
-        super().__init__(expr=expr, indices=tuple(indices), **kwargs)
-    
+        super().__init__(expr=expr, output_shape=tuple(output_shape), **kwargs)
+
+    @staticmethod
+    def _generateResultType(existing_shape: ResultType, output_shape: DeindexFormatTypeHint,
+                            exprType: DTLType) -> (ResultType, Set[Index]):
+        if isinstance(existing_shape, ShapeType):
+            indices = set()
+            dims = []
+            for o in output_shape:
+                if isinstance(o, Index):
+                    indices.add(o)
+                    dims.append(exprType.spaceOf(o))
+                else:
+                    dims.append(o)
+            return ShapeType(dims), indices
+        if isinstance(existing_shape, ResultTupleType):
+            results, indices = zip(*[DeindexExpr._generateResultType(shape, o, exprType) for shape, o in zip(existing_shape.results, output_shape)])
+            return ResultTupleType(results), {i for i in indices}
+
     @property
     def type(self) -> DTLType:
         exprType = self.expr.type
-        args = {i: exprType.spaceOf(i) for i in exprType.indices if i not in self.indices}
-        dims = [exprType.spaceOf(i) for i in self.indices]
-        result = exprType.result.withExtraDims(dims)
+        result, indices = DeindexExpr._generateResultType(exprType.result, self.output_shape, exprType)
+        args = {i: exprType.spaceOf(i) for i in exprType.indices if i not in indices}
         return DTLType(args, result)
     
     @property
+    def indices(self) -> Set[Index]:
+        exprType = self.expr.type
+        result, indices = DeindexExpr._generateResultType(exprType.result, self.output_shape, exprType)
+        return indices
+    
+    @property
     def operands(self):
-        return {"expr": self.expr, "indices": self.indices}
+        return {"expr": self.expr, "output_shape": self.output_shape}
     
     def with_operands(self, operands):
-        return self.copy(expr=operands["expr"], indices=operands["indices"])
+        return self.copy(expr=operands["expr"], output_shape=operands["output_shape"])
+
+    @staticmethod
+    def _str_indices(indices) -> str:
+        if isinstance(indices, Sequence):
+            return '[' + ','.join([DeindexExpr._str_indices(i) for i in indices]) + ']'
+        else:
+            return str(indices)
     
     def __str__(self) -> str:
-        return f"({self.expr})|{','.join(map(str, self.indices))}|"
+        return f"({self.expr})|{DeindexExpr._str_indices(self.output_shape)}|"
 
     def shortStr(self) -> str:
-        return f"({self.expr.terminalShortStr()})|{','.join(map(str, self.indices))}|"
+        return f"({self.expr.terminalShortStr()})|{DeindexExpr._str_indices(self.output_shape)}|"
     
     def makes_scope(self, index):
         return index in self.indices

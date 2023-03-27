@@ -1,3 +1,5 @@
+from typing import Tuple, Dict
+
 import dtl
 import itertools
 import loopy as lp
@@ -5,10 +7,10 @@ import functools
 import pymbolic as pym
 import numpy as np
 
-from dtlutils import visualise
-from dtlutils.names import make_Index_names_unique
+from dtl.dtlutils import visualise, traversal
+from dtl.passes.names import make_Index_names_unique
 
-from dtlutils.traversal import path_id, get_scope
+from dtl.dtlutils.traversal import path_id
 
 
 class NameGenerator:
@@ -36,8 +38,10 @@ class KernelBuilder:
     def build(self):
         print("buildA")
         self._expr = make_Index_names_unique(self._expr)
-        visualise.plot_dag(self._expr.scalar_expr, view=True, label_edges=True)
-        self._collect_bits(self._expr, [])
+        visualise.plot_dag(self._expr, view=True, label_edges=True)
+        # self._collect_bits(self._expr, [])
+        expr = self._get_expression(self._expr, [])
+        print(expr)
         print("buildB")
 
         return lp.make_kernel(
@@ -56,9 +60,10 @@ class KernelBuilder:
     @_get_domains.register
     def _(self, expr: dtl.IndexSum):
         domains = set()
+        exprType = expr.expr.type
         for idx in expr.sum_indices:
-            space = expr.index_spaces[idx]
-            if isinstance(space, dtl.UnknownSizeVectorSpace):
+            space = exprType.spaceOf(idx)
+            if not isinstance(space, dtl.RealVectorSpace):
                 raise NotImplementedError
             size = space.dim
             domain = f"{{ [{idx.name}]: 0 <= {idx.name} < {size} }}"
@@ -66,64 +71,97 @@ class KernelBuilder:
         return frozenset(domains) | self._get_domains(expr.scalar_expr)
     
     @_get_domains.register
-    def _(self, expr: dtl.ScalarExpr):
-        if len(expr.operands)>0:
-            return frozenset.union(*[self._get_domains(child) for child in expr.operands])
-        else:
-            return frozenset()
+    def _(self, expr: dtl.Expr):
+        s = frozenset()
+        for o in traversal.allOperands(expr):
+            s = s | self._get_domains(o)
+        return s
     
     @functools.singledispatchmethod
-    def _get_expression(self, expr: dtl.ScalarExpr):
+    def _get_expression(self, expr: dtl.Expr, path: Tuple[str,...]):
         raise TypeError
     
     @_get_expression.register
-    def _(self, expr: dtl.IndexSum):
+    def _(self, expr: dtl.IndexSum, path: Tuple[str,...]):
         inames = tuple(pym.var(idx.name) for idx in expr.sum_indices)
         # return f"sum({','.join(idx.name for idx in expr.sum_indices)}, {self._get_expression(expr.scalar_expr)})"
-        return lp.Reduction(lp.library.reduction.SumReductionOperation(), inames, self._get_expression(expr.scalar_expr))
+        return lp.Reduction(lp.library.reduction.SumReductionOperation(), inames, self._get_expression(expr.expr, (*path,".expr")))
         # return lp.Reduction("sum", inames, self._get_expression(expr.scalar_expr))
 
     @_get_expression.register
-    def _(self, expr: dtl.Literal):
+    def _(self, expr: dtl.Literal, path: Tuple[str,...]):
         # return f"({self._get_expression(expr.lhs)} * {self._get_expression(expr.rhs)})"
         return expr.f
 
 
     @_get_expression.register
-    def _(self, expr: dtl.MulBinOp):
+    def _(self, expr: dtl.MulBinOp, path: Tuple[str,...]):
         # return f"({self._get_expression(expr.lhs)} * {self._get_expression(expr.rhs)})"
-        return self._get_expression(expr.lhs) * self._get_expression(expr.rhs)
+        return self._get_expression(expr.lhs, (*path,".expr")) * self._get_expression(expr.rhs, (*path,".expr"))
 
     @_get_expression.register
-    def _(self, expr: dtl.AddBinOp):
+    def _(self, expr: dtl.AddBinOp, path: Tuple[str,...]):
         # return f"({self._get_expression(expr.lhs)} + {self._get_expression(expr.rhs)})"
-        return self._get_expression(expr.lhs) + self._get_expression(expr.rhs)
+        return self._get_expression(expr.lhs, (*path,".lhs")) + self._get_expression(expr.rhs, (*path,".rhs"))
 
     @_get_expression.register
-    def _(self, expr: dtl.IndexedTensor):
+    def _(self, expr: dtl.IndexExpr, path: Tuple[str,...]):
         # if not isinstance(expr.tensor_expr, dtl.TensorVariable):
         #     raise NotImplementedError
         # return f"({self._get_expression(expr.tensor_expr)}[{','.join(idx.name for idx in expr.tensor_indices)}])"
-        return pym.subscript(self._get_expression(expr.tensor_expr), tuple(pym.var(idx.name) for idx in expr.tensor_indices))
+        return pym.subscript(self._get_expression(expr.expr, (*path,".expr")), tuple(pym.var(idx.name) for idx in expr.tensor_indices))
 
     @_get_expression.register
-    def _(self, expr: dtl.TensorVariable):
+    def _(self, expr: dtl.TensorVariable, path: Tuple[str,...]):
         return pym.var(expr.name)
 
+    def _init_tensor_for_all_tuple(self, exprs, result: dtl.ResultType, output_shape: dtl.DeindexFormatTypeHint,
+                                   newMap: Dict[dtl.Index, str]):
+        if isinstance(result, dtl.ShapeType):
+            if not isinstance(output_shape, tuple):
+                raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to its child")
+            if not isinstance(exprs, ExpressionNode):
+                raise ValueError(
+                    "Internal Compiler Error: mismatched result type from DeindexExpr to expressionNode produced")
+            tvar_name = self._namer.next()
+            return InitTensor(tvar_name, [d.dim for d in result.dims]), AssignTensor(tvar_name, [
+                newMap[o] if isinstance(o, dtl.Index) else ':' for o in output_shape], exprs), ExprConst(tvar_name)
+    
+        elif isinstance(result, dtl.ResultTupleType):
+            if not isinstance(output_shape, tuple):
+                raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to its child")
+            if not isinstance(exprs, tuple):
+                raise ValueError(
+                    "Internal Compiler Error: mismatched result type from DeindexExpr to expressionNode tuple produced")
+            return zip(*[self._init_tensor_for_all_tuple(e, r, s, newMap) for e, r, s in
+                         zip(exprs, result.results, output_shape)])
     @_get_expression.register
-    def _(self, expr: dtl.deIndex):
-        if expr in self.registered_tensor_variables:
-            return pym.var(self.registered_tensor_variables[expr])
-        else:
-            raise NotImplementedError
+    def _(self, expr: dtl.DeindexExpr, path: Tuple[str,...]):
+        # if expr in self.registered_tensor_variables:
+        #     return pym.var(self.registered_tensor_variables[expr])
+        # else:
+        #     raise NotImplementedError
+        newMap = dict()
+        for i in expr.indices:
+            iname = i.name
+            vs = expr.expr.type.spaceOf(i)
+            if not isinstance(vs, dtl.RealVectorSpace):
+                raise NotImplementedError
+            size = vs.dim
+            domain = f"{{ [{iname}]: 0 <= {iname} < {size} }}"
+            self.domains.append(domain)
+        sub_inst, sub_expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)
+        inits, acc, exprs = self._init_tensor_for_all_tuple(sub_expression, expr.type.result, expr.output_shape, newMap)
+        allInits = traversal.flattenTupleTreeToList(inits)
+        allAcc = traversal.flattenTupleTreeToList(acc)
 
     @functools.singledispatchmethod
     def _collect_bits(self, expr, path, **kwargs):
-        for child in expr.operands:
-            self._collect_bits(child, path+[path_id(expr, child)])
+        for label, child in traversal.allOperandsLabelled(expr.operands):
+            self._collect_bits(child, path+[label])
 
     @_collect_bits.register
-    def _(self, expr: dtl.deIndex, path, **kwargs):
+    def _(self, expr: dtl.DeindexExpr, path, **kwargs):
         tvar_name = f"P_{'_'.join(str(p) for p in path)}"
         print(f"build deIndex: {tvar_name}")
         if expr in self.registered_tensor_variables:
@@ -131,7 +169,7 @@ class KernelBuilder:
         else:
             self.registered_tensor_variables[expr] = tvar_name
             
-            self._collect_bits(expr.scalar_expr, path + [path_id(expr, expr.scalar_expr)])
+            self._collect_bits(expr.expr, path + [".expr"])
             
             for index in (expr.indices):
                 iname = index.name
@@ -168,13 +206,12 @@ class KernelBuilder:
     
             # loopInames = (idx for idx, space in expr.index_spaces)
             loop_inames = frozenset({idx.name for idx in expr.index_spaces.keys()})  # (i, j)indexed_tensor.tensor_  # {i, j}
-            expression = self._get_expression(expr.scalar_expr)
+            expression = self._get_expression(expr.scalar_expr, (*path,".expr"))
             print(assignee)
             print("=")
             print(expression)
             # self._collect_bits(expr.scalar_expr, path+[path_id(expr, expr.scalar_expr)])
             #maybe within_inames can be worked out from here, not passed back
-    
             #A[i] = A[i] + B[i,j]
             insn = lp.Assignment(
                 assignee, expression,

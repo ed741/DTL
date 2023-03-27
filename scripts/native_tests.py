@@ -1,9 +1,9 @@
 from dtl import *
 from dtl.dag import RealVectorSpace, Index
-from dtlpp.backends.native import KernelBuilder, InstantiationExprNode, SequenceExprNode, IndexRebinding
+from dtlpp.backends.native import KernelBuilder, InstantiationExprNode, SequenceExprNode
 import numpy as np
 
-from dtlutils import visualise
+from dtl.dtlutils import visualise
 
 v5 = RealVectorSpace(5)
 v9 = RealVectorSpace(9)
@@ -31,10 +31,12 @@ C_TT2 = C[i,j].forall(i,j)
 # a,b = InstantiationExprNode(t).tuple()
 # expr = (a*b).sum(i).forall(j,k)
 
-t = InstantiationExprNode((A[None,i][j:i][k]*A[k,i]).forall(i,j))
-expr = SequenceExprNode(t, ((t[i,j] * t[i,j] * B[p,k]).sum(k) * t[i,j]).forall(p,j,i)).forall(k)
+ts = InstantiationExprNode((A[None,i][j:i][k]*A[k,i]).forall(i,j))
+t = ts
+expr = ExprTuple((ts, ((t[i,j] * t[i,j] * B[p,k]).sum(k) * t[i,j]).forall(p,j,i).forall(k))).tuple()[1]
 
-expr = IndexRebinding(A[i,j], [i,j], [k,p])
+# expr = SequenceExprNode(t, ((t[i,j] * t[i,j] * B[p,k]).sum(k) * t[i,j]).forall(p,j,i)).forall(k)
+# expr = IndexRebinding(A[i,j], [i,j], [k,p])
 
 print(expr)
 print(expr.type)
@@ -42,7 +44,7 @@ print("native_test.2")
 visualise.plot_dag(expr, view=True, label_edges=True, short_strs=True)
 # visualise.plot_dag(expr, view=True, label_edges=True, coalesce_duplicates=False)
 
-builder = KernelBuilder(expr)
+builder = KernelBuilder(expr, debug_comments=True)
 print("native_test.3")
 kernel = builder.build()
 print("native_test.4")

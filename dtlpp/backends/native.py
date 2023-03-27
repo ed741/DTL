@@ -9,7 +9,7 @@ import functools
 import numpy as np
 
 from dtl import Node, DTLType
-from dtlutils import visualise, traversal
+from dtl.dtlutils import visualise, traversal
 
 class ExpressionNode(abc.ABC):
     @abc.abstractmethod
@@ -390,18 +390,19 @@ class IndexRebinding(dtl.Expr):  # [...] -> <...>... , {b:B} => [...b:B] -> <...
 
 
 class KernelBuilder:
-    def __init__(self, expr: dtl.Expr):
+    def __init__(self, expr: dtl.Expr, debug_comments=False):
         self._expr = expr
         self.codeNode = None
         self.registered_tensor_variables = {}
         self.registered_tensor_instantiations = {}
         self._namer = NameGenerator(prefix="t_")
         self._index_namer = NameGenerator(prefix="_")
+        self.debug_comments = debug_comments
     
     def build(self):
         print("buildA")
         # self._expr = make_Index_names_unique_CSE(self._expr)
-        visualise.plot_dag(self._expr, view=True, label_edges=True, short_strs=True, skip_terminals=True, show_types=True)
+        visualise.plot_dag(self._expr, view=True, label_edges=True, short_strs=True, skip_terminals=False, show_types=True)
         print(str(self._expr))
         
         tensorInputs = frozenset()
@@ -453,7 +454,10 @@ class KernelBuilder:
         if frozenset(indexMap.keys()) != e.type.indices:
             raise ValueError(
                 f"Internal Compiler Error: Indices map {str(indexMap)} does not match type {str(e.type)} in {str(e)} at path {path}")
-        return self._get_expression_r(e, indexMap, path)
+        inst, expression = self._get_expression_r(e, indexMap, path)
+        if self.debug_comments:
+            inst = SeqNode([CodeComment(f"Inst for: {e.shortStr()}"), inst])
+        return inst, expression
     
     @functools.singledispatchmethod
     def _get_expression_r(self, expr: dtl.Expr, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
@@ -536,29 +540,28 @@ class KernelBuilder:
         sum_inst = SeqNode([AssignTemp(t_var, ExprConst('0')), loop])
         return sum_inst, ExprConst(t_var)
     
-    def _init_tensor_for_all_tuple(self, exprs, result:dtl.ResultType, subresult:dtl.ResultType, newIndices: typing.List[str]):
+    def _init_tensor_for_all_tuple(self, exprs, result:dtl.ResultType, output_shape:dtl.DeindexFormatTypeHint, newMap: typing.Dict[dtl.Index, str]):
         if isinstance(result, dtl.ShapeType):
-            if not isinstance(subresult, dtl.ShapeType):
+            if not isinstance(output_shape, tuple):
                 raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to its child")
             if not isinstance(exprs, ExpressionNode):
                 raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to expressionNode produced")
             tvar_name = self._namer.next()
-            return InitTensor(tvar_name, [d.dim for d in result.dims]), AssignTensor(tvar_name, [':' for _ in subresult.dims]+[i for i in newIndices], exprs), ExprConst(tvar_name)
+            return InitTensor(tvar_name, [d.dim for d in result.dims]), AssignTensor(tvar_name, [newMap[o] if isinstance(o, dtl.Index) else ':' for o in output_shape], exprs), ExprConst(tvar_name)
         
         elif isinstance(result, dtl.ResultTupleType):
-            if not isinstance(subresult, dtl.ResultTupleType):
+            if not isinstance(output_shape, tuple):
                 raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to its child")
             if not isinstance(exprs, tuple):
                 raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to expressionNode tuple produced")
-            return zip(*[self._init_tensor_for_all_tuple(e,r,s,newIndices) for e,r,s in zip(exprs, result.results, subresult.results)])
+            return zip(*[self._init_tensor_for_all_tuple(e,r,s,newMap) for e,r,s in zip(exprs, result.results, output_shape)])
     @_get_expression_r.register
     def _(self, expr: dtl.DeindexExpr, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
         newMap = dict(indexMap)
         for i in expr.indices:
             newMap[i]=self._index_namer.next(i.name+"_")
-        newIndices = [newMap[i] for i in expr.indices]
         sub_inst, sub_expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)
-        inits, acc, exprs = self._init_tensor_for_all_tuple(sub_expression, expr.type.result, expr.expr.type.result, newIndices)
+        inits, acc, exprs = self._init_tensor_for_all_tuple(sub_expression, expr.type.result, expr.output_shape, newMap)
         allInits = traversal.flattenTupleTreeToList(inits)
         allAcc = traversal.flattenTupleTreeToList(acc)
         
@@ -576,7 +579,7 @@ class KernelBuilder:
     def _(self, expr: dtl.ExprTuple, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
         tIndices = [e.type.indices for e in expr.exprs]
         tIndexMaps = [{i: v for i,v in indexMap.items() if i in idxs} for idxs in tIndices]
-        tSubInsts, tSubExprs = zip(*[self._get_expression(traversal.operandLabelled(expr, ["exprs", i]), idxMap, path) for (i,e), idxMap in zip(enumerate(expr.exprs), tIndexMaps)])
+        tSubInsts, tSubExprs = zip(*[self._get_expression(traversal.operandLabelled(expr, ["exprs", i]), idxMap, path) for (i, e), idxMap in zip(enumerate(expr.exprs), tIndexMaps)])
         return SeqNode(tSubInsts), tuple(tSubExprs)
 
     @_get_expression_r.register

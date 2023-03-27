@@ -1,7 +1,7 @@
 import typing
 
 import dtl
-from dtlutils import traversal
+from dtl.dtlutils import traversal
 
 
 def use_common_subexpressions(root: dtl.Node, ignoring: typing.Sequence[str] = None, ignore_fn=None):

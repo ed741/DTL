@@ -1,8 +1,7 @@
 import random
 
 from dtl.dag_ext_non_scalar import *
-from dtlutils.traversal import prepostOrderRoute
-from dtlutils.visualise import *
+from dtl.dtlutils.traversal import prepostOrderRoute
 
 
 def plot_nd_network(expr: Union[dtl.TensorExpr, dtl.Lambda], *, name="expression", view=False, **kwargs):

@@ -1,6 +1,7 @@
 import functools
 import typing
 
+import dtl
 from dtl import Node
 
 
@@ -27,11 +28,11 @@ def __operandsToList(operands, label=None):
     ## we can search for results in an 'operands' structure that are not nodes: but these results must not be list, tuple, or dict
     return [operands] if label is None else [(label, operands)]
 
-def allOperands(operands) -> typing.Iterable:
+def allOperands(operands) -> typing.Iterable[Node]:
     return __operandsToList(operands)
 
 
-def allOperandsLabelled(operands) -> typing.Iterable:
+def allOperandsLabelled(operands) -> typing.Iterable[typing.Tuple[str, Node]]:
     return __operandsToList(operands, label="")
 
 def flattenTupleTreeToList(tree: tuple)->list:

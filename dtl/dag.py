@@ -968,7 +968,7 @@ class DeindexExpr(Expr):
             return ShapeType(dims), indices
         if isinstance(existing_shape, ResultTupleType):
             results, indices = zip(*[DeindexExpr._generateResultType(shape, o, exprType) for shape, o in zip(existing_shape.results, output_shape)])
-            return ResultTupleType(results), {i for i in indices}
+            return ResultTupleType(results), {i for idxs in indices for i in idxs}
 
     @property
     def type(self) -> DTLType:

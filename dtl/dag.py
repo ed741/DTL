@@ -9,15 +9,17 @@ import pytools
 class Node(pytools.ImmutableRecord, abc.ABC):
     fields = {"attrs"}
     
-    def __init__(self, attrs: Dict[str, Any] = None, **kwargs):
+    def __init__(self, attrs: Dict[str, Any] = None, _NonUserFileNames_ = None, **kwargs):
         if attrs is None:
             attrs = {}
+        if _NonUserFileNames_ is None:
+            _NonUserFileNames_ = []
         if not isinstance(attrs, Dict):
             attrs = {k: v for k, v in attrs}
         if "frame_info" not in attrs:
             frame = currentframe()
             here = getframeinfo(currentframe())
-            while (getframeinfo(frame).filename is here.filename):
+            while getframeinfo(frame).filename in (_NonUserFileNames_ + [here.filename]):
                 if frame.f_back is None:
                     break
                 frame = frame.f_back
@@ -114,7 +116,7 @@ class Index(Terminal):
         return self.name
     
 class _NoneIndex(Terminal):
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
 
     def __str__(self) -> str:
@@ -422,6 +424,7 @@ class DTLType():
             raise ValueError(
                 f"{message}\n{out}"
             )
+        
 
 
 class Expr(Node, abc.ABC):
@@ -438,7 +441,7 @@ class Expr(Node, abc.ABC):
         if isinstance(shapes, VectorSpaceVariable):
             space = shapes
             # Base case for individual Dims
-            if indices is None:
+            if indices is None or indices is NoneIndex:
                 return {}  # They can not index a VectorSpaceVariable if they like
             if isinstance(indices, Index):
                 index = indices

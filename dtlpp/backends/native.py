@@ -1,4 +1,5 @@
 import abc
+import inspect
 import typing
 from abc import ABC
 from typing import Dict
@@ -8,7 +9,7 @@ import itertools
 import functools
 import numpy as np
 
-from dtl import Node, DTLType
+from dtl import Node, DTLType, dtlMatrix
 from dtl.dtlutils import visualise, traversal
 
 class ExpressionNode(abc.ABC):
@@ -97,6 +98,18 @@ class ExprConst(ExpressionNode):
         else:
             return args[self.val]
 
+
+class ExprScalarLiteral(ExpressionNode):
+    def __init__(self, val: float):
+        self.val = val
+    
+    def code(self):
+        return f"(np.full((),{self.val})"
+    
+    def do(self, args: typing.Dict[str, typing.Any]):
+        return np.float32(self.val)
+        return np.full((), self.val)
+
 class ExprNdMax(ExpressionNode):
     def __init__(self, expr: ExpressionNode):
         self.expr = expr
@@ -108,14 +121,34 @@ class ExprNdMax(ExpressionNode):
         return np.max(self.expr.do(args))
 
 class ExprNdMatInv(ExpressionNode):
-    def __init__(self, expr: ExpressionNode):
+    def __init__(self, expr: ExpressionNode, skip_zero=False):
         self.expr = expr
+        self.skip_zero = skip_zero
     
     def code(self):
-        return f"(np.linalg.inv({self.expr}))"
+        if self.skip_zero:
+            return f"(np.linalg.inv(T_if) if (T_if:={self.expr})[0,0]!=0.0 else T_if)"
+        else:
+            return f"(np.linalg.inv({self.expr}))"
     
     def do(self, args: typing.Dict[str, typing.Any]):
-        return np.linalg.inv(self.expr.do(args))
+        if self.skip_zero:
+            return np.linalg.inv(base) if (base:=self.expr.do(args))[0,0]!=0.0 else base
+        else:
+            return np.linalg.inv(self.expr.do(args))
+    
+class ExprPrint(ExpressionNode):
+    def __init__(self, expr: ExpressionNode, comment: str):
+        self.expr = expr
+        self.comment = comment
+    
+    def code(self) -> str:
+        return self.expr.code()
+    
+    def do(self, args: typing.Dict[str, typing.Any]):
+        subExpression = self.expr.do(args)
+        print(f"{self.comment}:{subExpression}")
+        
 
 
 class CodeNode(abc.ABC):
@@ -132,14 +165,22 @@ class CodeNode(abc.ABC):
 
 
 class Func():
-    def __init__(self, args, child: CodeNode, results):
+    def __init__(self, args, arg_shapes, child: CodeNode, results):
         self.args = args
+        self.arg_shapes = arg_shapes
         self.child = child
         self.results = results
     
     def do(self, **kwargs):
         if any(a not in kwargs for a in self.args):
-            raise ValueError(f"Arguments not satisfied.\n Provided: {str(kwargs)}\n needed: {self.args}")
+            raise ValueError(f"Arguments not satisfied.\n Provided: {str(list(kwargs.keys()))}\n needed: {self.args}")
+        for arg, shape in zip(self.args, self.arg_shapes):
+            input = kwargs[arg]
+            tshape = tuple(v.dim for v in shape)
+            if isinstance(shape, tuple) and input.shape != tshape:
+                raise ValueError(f"Tensor Argument: {arg} should have shape {tshape} but {input.shape} was provided.")
+            elif isinstance(shape, int) and input >= shape:
+                raise ValueError(f"Index Argument: {arg} should be in range [0,{shape}) but {input} was provided.")
         self.child.do(kwargs)
         return traversal.forAllOperands(self.results, lambda e: e.do(kwargs))
     
@@ -288,7 +329,7 @@ class InstantiationExprNode(dtl.Expr):
     
     def __init__(self, expr: dtl.ExprTypeHint, **kwargs):
         expr = dtl.Expr.exprInputConversion(expr)
-        super().__init__(expr=expr)
+        super().__init__(expr=expr, _NonUserFileNames_= [inspect.getframeinfo(inspect.currentframe()).filename], **kwargs)
     @property
     def type(self) -> DTLType:
         return self.expr.type
@@ -316,7 +357,7 @@ class SequenceExprNode(dtl.Expr):
         DTLType.checkCommonIndices([expr.type, pre.type])
         if len(pre.type.indices - expr.type.indices)>0:
             raise ValueError(f"pre-expr {pre.type} must not use indices that are not in use in expr: {expr.type}")
-        super().__init__(expr=expr, pre=pre)
+        super().__init__(expr=expr, pre=pre, _NonUserFileNames_= [inspect.getframeinfo(inspect.currentframe()).filename], **kwargs)
     
     @property
     def type(self) -> DTLType:
@@ -361,7 +402,7 @@ class IndexRebinding(dtl.Expr):  # [...] -> <...>... , {b:B} => [...b:B] -> <...
         
         if "spaces" in kwargs:
             print("huh")
-        super().__init__(expr=expr, outer_indices=tuple(outer_indices), inner_indices=tuple(inner_indices), **kwargs)
+        super().__init__(expr=expr, outer_indices=tuple(outer_indices), inner_indices=tuple(inner_indices), _NonUserFileNames_= [inspect.getframeinfo(inspect.currentframe()).filename], **kwargs)
     
     @property
     def type(self) -> DTLType:
@@ -389,8 +430,33 @@ class IndexRebinding(dtl.Expr):  # [...] -> <...>... , {b:B} => [...b:B] -> <...
         return f"{self.expr.terminalShortStr()}{{{','.join([str(i) + '->' + str(s) for i, s, in zip(self.outer_indices, self.inner_indices)])}}}"
 
 
+class PrintExprNode(dtl.Expr):
+    fields = dtl.Expr.fields | {"expr", "string"}
+    
+    def __init__(self, expr: dtl.ExprTypeHint, string, **kwargs):
+        expr = dtl.Expr.exprInputConversion(expr)
+        super().__init__(expr=expr, string=string)
+    
+    @property
+    def type(self) -> DTLType:
+        return self.expr.type
+    
+    @property
+    def operands(self):
+        return {"expr": self.expr}
+    
+    def with_operands(self, operands: Dict):
+        return self.copy(expr=operands["expr"])
+    
+    def __str__(self):
+        return str(self.expr) + f"/*{self.string}*/"
+    
+    def shortStr(self) -> str:
+        return self.expr.terminalShortStr() + f"/*{self.string}*/"
+
+
 class KernelBuilder:
-    def __init__(self, expr: dtl.Expr, debug_comments=False):
+    def __init__(self, expr: dtl.Expr, debug_comments=0):
         self._expr = expr
         self.codeNode = None
         self.registered_tensor_variables = {}
@@ -402,7 +468,7 @@ class KernelBuilder:
     def build(self):
         print("buildA")
         # self._expr = make_Index_names_unique_CSE(self._expr)
-        visualise.plot_dag(self._expr, view=True, label_edges=True, short_strs=True, skip_terminals=False, show_types=True)
+        # visualise.plot_dag(self._expr, view=True, label_edges=True, short_strs=True, skip_terminals=False, show_types=True)
         print(str(self._expr))
         
         tensorInputs = frozenset()
@@ -410,6 +476,9 @@ class KernelBuilder:
         inputIndexSpaces = {}
         
         tensorInputs = tensorInputs.union(self.get_inputs(self._expr))
+        tensorInputs = [i for i in tensorInputs]
+        tensorInputNames = [e.name for e in tensorInputs]
+        tensorInputShapes = [e.type.result.dims for e in tensorInputs]
         etype  = self._expr.type
         for i in etype.indices:
             if i not in indexInputs:
@@ -419,8 +488,10 @@ class KernelBuilder:
                 raise ValueError(f"Argument index {i} must act on the same space in all expressions given")
 
         exprCode, expression = self._get_expression((None,self._expr), indexInputs, tuple())
-
-        self.codeNode = Func(list(tensorInputs) + list(indexInputs.values()), exprCode, expression)
+        inputNames = tensorInputNames + list(indexInputs.values())
+        inputShapes = tensorInputShapes + [inputIndexSpaces[i] for i in indexInputs]
+        
+        self.codeNode = Func(inputNames, inputShapes, exprCode, expression)
         print(self.codeNode.code())
         return self.codeNode.do
         
@@ -440,7 +511,7 @@ class KernelBuilder:
         if expr not in self.registered_tensor_variables:
             shape = expr.type.result
             self.registered_tensor_variables[expr] = (tvar_name, shape)
-        return frozenset([expr.name])
+        return frozenset([expr])
     
     @get_inputs.register
     def _(self, expr: PythonDtlNode):
@@ -455,8 +526,15 @@ class KernelBuilder:
             raise ValueError(
                 f"Internal Compiler Error: Indices map {str(indexMap)} does not match type {str(e.type)} in {str(e)} at path {path}")
         inst, expression = self._get_expression_r(e, indexMap, path)
-        if self.debug_comments:
-            inst = SeqNode([CodeComment(f"Inst for: {e.shortStr()}"), inst])
+        if self.debug_comments >0:
+            comments = [CodeComment(f"Inst for: {e.shortStr()}")]
+            if self.debug_comments > 1:
+                comments.append(
+                        CodeComment(f"        : {str(e)}"))
+            if self.debug_comments > 2:
+                comments.append(
+                        CodeComment(f"        : {e.attributes['frame_info']}"))
+            inst = SeqNode(comments+[inst])
         return inst, expression
     
     @functools.singledispatchmethod
@@ -494,6 +572,10 @@ class KernelBuilder:
         newSubexpr = self._match_indices_and_subexprs(expr.indices, subexpr, indexMap)
         return inst, newSubexpr
 
+    @_get_expression_r.register
+    def _(self, expr: dtl.Literal, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        return SeqNode([]), ExprScalarLiteral(expr.f)
+    
     @_get_expression_r.register
     def _(self, expr: dtl.MulBinOp, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
         lhsIndices = expr.lhs.type.indices
@@ -658,3 +740,14 @@ class KernelBuilder:
         for i_out, i_in in zip(expr.outer_indices, expr.inner_indices):
             newMap[i_out] = indexMap[i_in]
         return self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)
+    
+    @_get_expression_r.register
+    def _(self, expr: PrintExprNode, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        expr_inst, expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), indexMap, path)
+        return SeqNode([CodeComment(expr.string),expr_inst]), ExprPrint(expression, expr.string)
+    
+    @_get_expression_r.register
+    def _(self, expr: dtlMatrix.Invert, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
+        expr_inst, expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), indexMap, path)
+        return expr_inst, ExprNdMatInv(expression, skip_zero=expr.skip_zero)
+    

@@ -4,6 +4,7 @@ import numpy as np
 
 import dtl
 from dtl import Expr, Index, RealVectorSpace, TensorVariable, IndexSum, DTLType
+from dtl.dtlMatrix import Invert
 from dtlpp.backends import native
 from dtlpp.backends.native import PythonDtlNode, KernelBuilder, CodeComment, SeqNode, ExprConst, CodeNode, \
     ExpressionNode
@@ -26,7 +27,10 @@ class MarginaliseFactor(dtl.Expr, PythonDtlNode):
         
     @property
     def type(self) -> DTLType:
-        return self.expr.type
+        exprType = self.expr.type
+        typeCheck = exprType.result.matchShape((("v", "t"), ("v", "v", "t", "t")))
+        results = dtl.ResultTupleType([dtl.ShapeType([typeCheck["t"]]),dtl.ShapeType([typeCheck["t"],typeCheck["t"]])])
+        return exprType.withResult(results)
     
     @property
     def operands(self):
@@ -68,7 +72,10 @@ class MarginaliseFactor(dtl.Expr, PythonDtlNode):
                        f"{id}ab = lambda_np[0,1:,:,:].transpose([1,0,2]).reshape(lambda_np.shape[-1],-1)\n" \
                        f"{id}ba = lambda_np[1:, 0, :, :].reshape(-1,lambda_np.shape[-1])\n" \
                        f"{id}bb = lambda_np[1:, 1:, :, :].transpose([0,2,1,3]).reshape(-1,lambda_np.shape[-1]*(lambda_np.shape[0]-1))\n" \
-                       f"{id}bbInv = np.linalg.inv(bb)\n" \
+                       f"{id}if bb[0,0] !=0.0:\n" \
+                       f"{id}   bbInv = np.linalg.inv(bb)\n" \
+                       f"{id}else:\n" \
+                       f"{id}   bbInv = bb\n" \
                        f"{id}abbbInv = np.matmul(ab, bbInv)\n" \
                        f"{id}{cself.temp_eta_name} = ea - np.matmul(abbbInv, eb)\n" \
                        f"{id}{cself.temp_lambda_name} = aa - np.matmul(abbbInv, ba)"
@@ -86,10 +93,17 @@ class MarginaliseFactor(dtl.Expr, PythonDtlNode):
                 ab = lambda_np[0,1:,:,:].transpose([1,0,2]).reshape(lambda_np.shape[-1],-1)
                 ba = lambda_np[1:, 0, :, :].reshape(-1,lambda_np.shape[-1])
                 bb = lambda_np[1:, 1:, :, :].transpose([0,2,1,3]).reshape(-1,lambda_np.shape[-1]*(lambda_np.shape[0]-1))
-                bbInv = np.linalg.inv(bb)
+                # print(f"Marg m:{args['_m_10'] if '_m_10' in args else args['_m_9']} slot:{slot_idx}")
+                if bb[0,0] !=0.0:
+                    bbInv = np.linalg.inv(bb)
+                else:
+                    bbInv = bb
+
                 abbbInv = np.matmul(ab, bbInv)
                 emarg = ea - np.matmul(abbbInv, eb)
                 lmarg = aa - np.matmul(abbbInv, ba)
+                # print(emarg)
+                # print(lmarg)
                 args[cself.temp_eta_name] = emarg
                 args[cself.temp_lambda_name] = lmarg
                 
@@ -105,26 +119,67 @@ class MarginaliseFactor(dtl.Expr, PythonDtlNode):
             (ExprConst("marginalisedEtaValue"),ExprConst("marginalisedLambdaValue"))
 
 
-
 """
 Code for our GBP Problem:
 
-F0 -- P0 -- F1 -- P1 -- F2 -- P2 -- F3 -- P3
-
+        F0 -- P0 -- F1 -- P1 -- F2 -- P2 -- F3 -- P3
+Truth:
+X:            0           2           3           4
+Y:            0           2           3           4
+Z:            0           2           3           4
 """
-# N_poses is the number of poses (variable nodes in the Factorgraph)
-N_poses = RealVectorSpace(5)
+
+HMatrixArray = np.zeros((4,3,2,3))
+LambdasArray = np.zeros((4,3,3))
+JacobiansArray = np.zeros((4,3,2,3))
+ZArray = np.zeros((4,3))
+AdjacencyArray = np.zeros((4,2,4))
+def make_middle_factor(f,va,vb, x,y,z, var):
+    AdjacencyArray[f, 0, va] = 1
+    AdjacencyArray[f, 1, vb] = 1
+    ZArray[f,:] = np.array([x,y,z])
+    LambdasArray[f,:,:] = var*np.identity(3)
+    JacobiansArray[f,:,0,:] = -1*np.identity(3)
+    JacobiansArray[f,:,1,:] = np.identity(3)
+    HMatrixArray[f,:,0,:] = -1*np.identity(3)
+    HMatrixArray[f,:,1,:] = np.identity(3)
+    
+make_middle_factor(1,0,1,100,10,10,1) # v0-f1-v1
+make_middle_factor(2,1,2,10,100,10,1) # v1-f2-v2
+make_middle_factor(3,2,3,10,10,100,1) # v2-f3-v3
+
+def make_anchor_factor(f,v,x,y,z, var):
+    AdjacencyArray[f, 0, v] = 1
+    ZArray[f, :] = np.array([x, y, z])
+    LambdasArray[f, :, :] = var * np.identity(3)
+    JacobiansArray[f, :, 0, :] = np.identity(3)
+    HMatrixArray[f, :, 0, :] = np.identity(3)
+    
+make_anchor_factor(0,0,0,0,0,100) # f0-v0
+# make_anchor_factor(1,1,10,10,-5,1) # f0-v0
+# make_anchor_factor(2,2,20,20,-5,10) # f0-v0
+# make_anchor_factor(3,3,30,30,-5,100) # f0-v0
+    
+
+
+
+# N_variables is the number of poses (variable nodes in the Factorgraph)
+N_variables = RealVectorSpace(4)
 # For clarity, we prefer using specific index names for different dimensions though this is not needed and only for ease
 # of reading
 n = Index("n")
-# PoseVec is the internal size of each variable in the factorGraph - for example (x,y,z)
-PoseVec = RealVectorSpace(3)
+# VarVec is the internal size of each variable in the factorGraph - for example (x,y,z)
+VarVec = RealVectorSpace(3)
 e = Index("e")
 l1 = Index("l1")
 l2 = Index("l2")
+ep = Index("ep")
+lp1 = Index("lp1")
+lp2 = Index("lp2")
 # Factor_connectivity is the maximum number of variables each measurement (factor node) is connected to.
 Factor_Connectivity = RealVectorSpace(2)
 c = Index("c")
+cp = Index("cp")
 s = Index("s")
 sp = Index("sp")
 # M_Measurements is the number of measurements in the graph (factor nodes in the factor graph)
@@ -132,8 +187,8 @@ M_Measurements = RealVectorSpace(4)
 m = Index("m")
 
 # These define some helpful tensorSpaces that can be combined later with more vector spaces
-etaTS = PoseVec ** 1 #TensorSpace([PoseVec])
-lambdaTS = PoseVec ** 2 #TensorSpace([PoseVec, PoseVec])
+etaTS = VarVec ** 1 #TensorSpace([VarVec])
+lambdaTS = VarVec ** 2 #TensorSpace([VarVec, VarVec])
 etaiTS = Factor_Connectivity * etaTS #TensorSpace([Factor_Connectivity, etaTS])
 lambdaiTS = Factor_Connectivity * Factor_Connectivity * lambdaTS #TensorSpace([Factor_Connectivity, lambdaTS])
 
@@ -143,41 +198,76 @@ lambdaiTS = Factor_Connectivity * Factor_Connectivity * lambdaTS #TensorSpace([F
 
 # Adjacency matrix elements are either 0 for no connection, and 1 where this is an edge in the graph. Each Measurement
 # Node slot may have up to 1 non-zero value as each
-AdjacencyMatrix = TensorVariable(M_Measurements*Factor_Connectivity*N_poses, "A")
-FactorBaseEtas = TensorVariable(M_Measurements*etaiTS, "FBE")
-FactorBaseLambdas = TensorVariable(M_Measurements*lambdaiTS, "FBL")
+AdjacencyMatrix = TensorVariable(M_Measurements * Factor_Connectivity * N_variables, "A")
+
+Jacobians = TensorVariable(M_Measurements * VarVec * Factor_Connectivity * VarVec, "J")
+HMatrix = TensorVariable(M_Measurements * VarVec * Factor_Connectivity * VarVec, "HM")
+FactorInputZs = TensorVariable(M_Measurements * VarVec, "Z")
+FactorInputLambdas = TensorVariable(M_Measurements * lambdaTS, "L")
+
+# FactorBaseEtas = TensorVariable(M_Measurements*etaiTS, "FBE")
+
+# FactorBaseLambdas = TensorVariable(M_Measurements*lambdaiTS, "FBL")
+
 # SlotToEta = TensorVariable(Factor_Connectivity*etaTS*Factor_Connectivity*etaiTS, "SlotToEta")
 # SlotToLambda = TensorVariable(Factor_Connectivity*lambdaTS*Factor_Connectivity*lambdaiTS, "SlotToLambda")
-Connectivity_Ones= TensorVariable(Factor_Connectivity, "One")
+# Connectivity_Ones= TensorVariable(Factor_Connectivity, "One")
 
 FactorToVariableEtaMessages = TensorVariable(M_Measurements*Factor_Connectivity*etaTS, "FVEM")
 FactorToVariableLambdaMessages = TensorVariable(M_Measurements*Factor_Connectivity*lambdaTS, "FVLM")
 
-VariablesTotalEtas = IndexSum(AdjacencyMatrix[m,c,n] * FactorToVariableEtaMessages[m,c,e], [m,c]) # [n,e]
-VariablesTotalLambdas = IndexSum(AdjacencyMatrix[m,c,n] * FactorToVariableLambdaMessages[m,c,l1,l2], [m,c]) # [n,l1,l2]
+VariablesTotalEtasT = native.InstantiationExprNode((AdjacencyMatrix[m,c,n] * FactorToVariableEtaMessages[m,c,e]).sum(m,c).forall(n,e))
+VariablesTotalEtas = VariablesTotalEtasT[n,e]# [n,e]
+VariablesTotalLambdasT = native.InstantiationExprNode((AdjacencyMatrix[m,c,n] * FactorToVariableLambdaMessages[m,c,l1,l2]).sum(m,c).forall(n,l1,l2))
+VariablesTotalLambdas = VariablesTotalLambdasT[n,l1,l2]# [n,l1,l2]
 
-VariableToFactorEtaMessages = native.InstantiationExprNode(IndexSum(VariablesTotalEtas * AdjacencyMatrix[m,c,n], [n]) - FactorToVariableEtaMessages[m,c,e]) # [m,c,e]
-VariableToFactorLambdaMessages = native.InstantiationExprNode(IndexSum(VariablesTotalLambdas * AdjacencyMatrix[m,c,n], [n]) - FactorToVariableLambdaMessages[m,c,l1,l2]) # [m,c,l1,l2]
+VariablesTotalCovariances = Invert(VariablesTotalLambdas.forall(l1,l2), skip_zero=True) #[n | 3x3]
+VariablesMusT = native.InstantiationExprNode((VariablesTotalCovariances[e,l2] * VariablesTotalEtas).sum(l2).forall(n,e))
+VariablesMus = VariablesMusT[n,e]# [n, e]
+
+VariableToFactorEtaMessages = native.InstantiationExprNode(IndexSum(VariablesTotalEtas * AdjacencyMatrix[m,s,n], [n]) - FactorToVariableEtaMessages[m,s,e]) # [m,s,e]
+VariableToFactorLambdaMessages = native.InstantiationExprNode(IndexSum(VariablesTotalLambdas * AdjacencyMatrix[m,cp,n], [n]) - FactorToVariableLambdaMessages[m,cp,l1,l2]) # [m,cp,l1,l2]
+VariableToFactorMuMessages = native.InstantiationExprNode(IndexSum(VariablesMus * AdjacencyMatrix[m,c,n], [n])) # [m,c,e]
+
+# HLocal = native.IndexRebinding((HMatrix[m,ep,c,e]*VariableToFactorMuMessages).sum(c,e), [ep], [e]) # [m,e]
+HLocalT = native.InstantiationExprNode((HMatrix[m,ep,c,e]*VariableToFactorMuMessages).sum(c,e).forall(m,ep))
+HLocal = HLocalT[m,e] # [m,e]
 
 
+FactorBaseLambdas = (Jacobians[m,lp1,s,l1] * FactorInputLambdas[m,lp1,lp2] * Jacobians[m,lp2,sp,l2]).sum(lp1,lp2) # m,s,l1,sp,l2
+Temp_eta_base_rhs = native.IndexRebinding((Jacobians[m,e,c,ep]*VariableToFactorMuMessages).sum(c,ep) + FactorInputZs[m,e] - HLocal, [e], [lp2]) # m,lp2
+FactorBaseEtas = native.IndexRebinding(((Jacobians[m,lp1,s,l1] * FactorInputLambdas[m,lp1,lp2]).sum(lp1) * Temp_eta_base_rhs).sum(lp2),[l1],[e]) # m,s,e
 # FactorEtas_t = native.InstantiationExprNode(((VariableToFactorEtaMessages[s:c]) + FactorBaseEtas[m,s,e]).forall(m,c,s,e))
 # FactorEtas = FactorEtas_t[m,c,s,e] # [m,c,s,e]
 # FactorEtas = ((VariableToFactorEtaMessages[s:c]) + FactorBaseEtas[m,s,e])
-FactorEtas = native.SequenceExprNode(VariableToFactorEtaMessages, ((VariableToFactorEtaMessages[s:c]) + FactorBaseEtas[m,s,e]).forall(s))
+
+ID = native.InstantiationExprNode(dtl.Literal(1)[sp:Factor_Connectivity].forall(sp,sp))
+D = native.InstantiationExprNode((dtl.Literal(1)[s:Factor_Connectivity,c:Factor_Connectivity] - ID[s,c]).forall(s,c))
+D = native.SequenceExprNode(ID, D)
+
+FactorEtas = ((VariableToFactorEtaMessages*D[c,s]) + FactorBaseEtas).forall(s,e) # m,c -> [s,e]
 # FactorLambdas_t = native.InstantiationExprNode(((VariableToFactorLambdaMessages[s:c, sp:c]) + FactorBaseLambdas[m,s,sp,l1,l2]).forall(m,c,s,sp,l1,l2))
 # FactorLambdas = FactorLambdas_t[m,c,s,sp,l1,l2]# [m,c,s,sp,l1,l2]
 # FactorLambdas = ((VariableToFactorLambdaMessages[s:c, sp:c]) + FactorBaseLambdas[m,s,sp,l1,l2])
-FactorLambdas = native.SequenceExprNode(VariableToFactorLambdaMessages, ((VariableToFactorLambdaMessages[s:c, sp:c]) + FactorBaseLambdas[m,s,sp,l1,l2]).forall(s,sp))
+FactorLambdas = ((VariableToFactorLambdaMessages* ID[sp,s]*ID[cp,s]*D[c,cp]).sum(cp) + FactorBaseLambdas).forall(s,sp, l1, l2) # m,c -> [s,sp,l1,l2]
 
 
 
 # preMarg = native.InstantiationExprNode((FactorEtas.forall(s,e), FactorLambdas.forall(s,sp,l1,l2)))
 # preMarg = (FactorEtas.forall(s,e), FactorLambdas.forall(s,sp,l1,l2))
-preMarg = (FactorEtas.forall(e), FactorLambdas.forall(l1,l2))
-marginalised = MarginaliseFactor(preMarg, c).forall(m,c)
-
-# expr = native.SequenceExprNode((FactorEtas_t, FactorLambdas_t), marginalised)
+preMargT = native.InstantiationExprNode(dtl.ExprTuple([FactorEtas, FactorLambdas]).forall(m,c))
+preMarg = preMargT[(dtl.NoneIndex, dtl.NoneIndex, m,c),(dtl.NoneIndex, dtl.NoneIndex,dtl.NoneIndex, dtl.NoneIndex, m,c)]
+marg = MarginaliseFactor(preMarg, c)
+marginalised = dtl.DeindexExpr(marg, ((m,c,VarVec),(m,c,VarVec,VarVec)))
 expr = marginalised
+# expr = native.SequenceExprNode((FactorEtas_t, FactorLambdas_t), marginalised)
+expr = native.SequenceExprNode(preMargT, expr)
+expr = native.SequenceExprNode(HLocalT, expr)
+expr = native.SequenceExprNode(VariablesMusT, expr)
+expr = native.SequenceExprNode(VariablesTotalLambdasT, expr)
+expr = native.SequenceExprNode(VariablesTotalEtasT, expr)
+expr = native.SequenceExprNode(D, expr)
+
 
 expr = optimise.use_common_subexpressions(expr, ["AutoGenerated", "frame_info"])
 
@@ -187,12 +277,39 @@ visualise.plot_dag(expr, view=True, coalesce_duplicates=True, label_edges=True, 
 # print([str(x) for x in etas.indices])
 print("done")
 
-builder = KernelBuilder(expr)
+builder = KernelBuilder(expr, debug_comments=0)
 kernel = builder.build()
 print("================================")
 print(builder.codeNode.code())
-out = kernel(A=np.zeros([4,6,5]), FVEM=np.zeros([4,6,3]), FVLM=np.zeros([4,6,3,3]), One=np.ones([6]), FBE=np.random.rand(5,6,3), FBL=np.random.rand(5,6,6,3,3))
-print(out)
-e,l = out
-print(e.shape)
-print(l.shape)
+
+builderMu = KernelBuilder(VariablesMus.forall(n,e))
+MuFunc = builderMu.build()
+
+fvem = np.zeros([4,2,3])
+fvlm = np.zeros([4,2,3,3])
+for step in range(5):
+    print(f"Step:{step}")
+    out = kernel(A=AdjacencyArray, FVEM=fvem, FVLM=fvlm, J=JacobiansArray, HM=HMatrixArray, L=LambdasArray, Z=ZArray)
+    # print(out)
+    out_eta,out_lambda = out
+    # print(out_eta.shape)
+    # print(out_lambda.shape)
+    factors = out_eta.shape[0]
+    # for f in range(factors):
+    #     v = np.argmax(AdjacencyArray[f,0,:])
+    #     print(f"f->v :: f:{f}, va:{v}")
+    #     print(out_eta[f,0,:])
+    #     print(out_lambda[f, 0, :,:])
+    #     v = np.argmax(AdjacencyArray[f, 1, :])
+    #     print(f"f->v :: f:{f}, vb:{v}")
+    #     print(out_eta[f, 1, :])
+    #     print(out_lambda[f, 1, :, :])
+    fvem = out_eta
+    fvlm = out_lambda
+    
+    mus = MuFunc(FVEM=fvem, FVLM=fvlm, A=AdjacencyArray)
+    print("mu:")
+    print(mus)
+    print(mus.shape)
+
+

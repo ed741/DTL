@@ -1,10 +1,13 @@
 import typing
 
 import dtl
+import xdsl.dialects.builtin
 from dtl.dtlutils import traversal
 from xdsl.dialects import arith, builtin
 from xdsl.ir import SSAValue
 from xdslDTL import dialect as xdtl
+
+
 
 import functools
 
@@ -32,11 +35,11 @@ def _(node: dtl.TensorVariable, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
     tensorVariables = {} if tensorVariables is None else tensorVariables
     if node in nodeMap: return [], nodeMap[node]
-    
-    out = tensorVariables[node]
-    
+
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.DenseBackedTensorOp.build(operands=[tensorVariables[node]], result_types=[type])
     nodeMap[node] = out
-    return [], out
+    return [out], out
 
 
 @get_xdsl_dtl_version.register
@@ -65,26 +68,45 @@ def _(node: dtl.IndexExpr, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
     tensorVariables = {} if tensorVariables is None else tensorVariables
     if node in nodeMap: return [], nodeMap[node]
-    
-    def DTLIndex_to_xdtl(idx: typing.Union[dtl.Index, dtl.NoneIndex]):
-        return xdtl.Index.new([builtin.StringAttr(idx.name)])
 
-    def fold_DTLIndex_to_xdtl(children):
-        if len(children) == 0:
-            return xdtl.IndexShapeStruct.new(builtin.ArrayAttr([]))
-        elif all(isinstance(child, xdtl.Index) for child in children):
-            return xdtl.IndexShapeStruct.new(builtin.ArrayAttr(children))
-        elif all(isinstance(child, xdtl.IndexShapeStruct) or isinstance(child, xdtl.IndexTupleStruct) for child in children):
-            return xdtl.IndexTupleStruct.new(builtin.ArrayAttr(children))
-        else:
-            raise ValueError
-    
-    indexStruct = traversal.forallTupleTreeFold(node.indices, DTLIndex_to_xdtl, fold_DTLIndex_to_xdtl)
+    indexStruct = DTLIndexing_to_xdtl(node.indices)
 
     lines, expr = get_xdsl_dtl_version(node.expr, nodeMap, tensorVariables)
     type = DTLType_to_xdtl(node.type)
-    out = xdtl.IndexBindingOp.build(operands=[expr], attributes={"indices": indexStruct}, result_types=[type])
+    out = xdtl.IndexOp.build(operands=[expr], attributes={"indices": indexStruct}, result_types=[type])
     
+    nodeMap[node] = out
+    return lines + [out], out
+
+
+@get_xdsl_dtl_version.register
+def _(node: dtl.DeindexExpr, nodeMap=None, tensorVariables=None):
+    nodeMap = {} if nodeMap is None else nodeMap
+    tensorVariables = {} if tensorVariables is None else tensorVariables
+    if node in nodeMap: return [], nodeMap[node]
+
+    indexStruct = DTLIndexing_to_xdtl(node.output_shape)
+
+    lines, expr = get_xdsl_dtl_version(node.expr, nodeMap, tensorVariables)
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.DeIndexOp.build(operands=[expr], attributes={"indices": indexStruct}, result_types=[type])
+
+    nodeMap[node] = out
+    return lines + [out], out
+
+
+@get_xdsl_dtl_version.register
+def _(node: dtl.IndexSum, nodeMap=None, tensorVariables=None):
+    nodeMap = {} if nodeMap is None else nodeMap
+    tensorVariables = {} if tensorVariables is None else tensorVariables
+    if node in nodeMap: return [], nodeMap[node]
+
+    indices = builtin.ArrayAttr([xdtl.Index.new([builtin.StringAttr(idx.name)]) for idx in node.sum_indices])
+
+    lines, expr = get_xdsl_dtl_version(node.expr, nodeMap, tensorVariables)
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.SumOp.build(operands=[expr], attributes={"indices": indices}, result_types=[type])
+
     nodeMap[node] = out
     return lines + [out], out
 
@@ -94,10 +116,31 @@ def _(node: dtl.IndexExpr, nodeMap=None, tensorVariables=None):
 #     f = arith.Constant.from_float_and_width(node.f, builtin.f32)
 #     out = xdtl.ScalarConstOp.get(f)
 #     return [f, out], out
+def DTLIndexing_to_xdtl(indices: tuple) -> xdtl.IndexStruct:
+    def DTLIndex_to_xdtl(idx: typing.Union[dtl.Index, dtl.NoneIndex]):
+        if idx is dtl.NoneIndex:
+            return xdtl.NoneIndex()
+        elif isinstance(idx, dtl.Index):
+            return xdtl.Index.new([builtin.StringAttr(idx.name)])
+        elif isinstance(idx, dtl.VectorSpaceVariable):
+            return vectorSpace_to_xdtl(idx)
+
+    def fold_DTLIndex_to_xdtl(children):
+        if len(children) == 0:
+            return xdtl.IndexShapeStruct.new([builtin.ArrayAttr([])])
+        elif all(isinstance(child, xdtl.Index | xdtl.NoneIndex | xdtl.VectorSpace) for child in children):
+            return xdtl.IndexShapeStruct.new([builtin.ArrayAttr(children)])
+        elif all((isinstance(child, xdtl.IndexShapeStruct) or isinstance(child, xdtl.IndexTupleStruct)) for child in
+                 children):
+            return xdtl.IndexTupleStruct.new([builtin.ArrayAttr(children)])
+        else:
+            raise ValueError
+
+    return traversal.forallTupleTreeFold(indices, DTLIndex_to_xdtl, fold_DTLIndex_to_xdtl)
 
 def DTLType_to_xdtl(type: dtl.DTLType):
     pairs = []
-    for i in sorted([i for i in type.indices]):
+    for i in sorted([i for i in type.indices], key=lambda i: i.name):
         idx = xdtl.Index.new([builtin.StringAttr(i.name)])
         space = type.spaceOf(i)
         vs = vectorSpace_to_xdtl(space)
@@ -116,6 +159,6 @@ def vectorSpace_to_xdtl(space: dtl.VectorSpaceVariable):
     if isinstance(space, dtl.UnknownSizeVectorSpace):
         return xdtl.UnknownVectorSpace.new([builtin.StringAttr(space.name)])
     elif isinstance(space, dtl.VectorSpace):
-        return xdtl.KnownVectorSpace.new([builtin.IntAttr(10)])
+        return xdtl.KnownVectorSpace.new([builtin.IntAttr(space.dim)])
     else:
         raise NotImplementedError

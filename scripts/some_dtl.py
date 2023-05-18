@@ -20,7 +20,7 @@ def func1():
     # T2 = Lambda([A := TensorVariable("A"),B := TensorVariable("B")], (A[j, i]*Abs(B[j,i])|[i, j])[k]|[k])
     A = TensorVariable(vsA * vsR1, "A")
     B = TensorVariable(vsR1 * vsB, "B")
-    T1 = DeindexExpr(MulBinOp(A[i,j], B[j,k], attrs={"check":"yes"}), (i,k))
+    T1 = DeindexExpr((A[i,j] * B[j,k]), (i,k))
     C = TensorVariable(vsR1 * vsB, "C")
     # A = TensorVariable(None, "A")
     # B = TensorVariable(None, "B")
@@ -29,8 +29,6 @@ def func1():
     # print(str(T1))
     # print(str(T2))
     print(str(T1))
-    print(T1.tensor_expr.space)
-    print(T1.tensor_expr.scalar_expr.attrs)
 
     def printNodeName(node):
         # print(str(node))
@@ -41,8 +39,8 @@ def func1():
         return node.copy()
     print("Post order:")
     T1 = postOrder(T1, printNodeName)
-    visualise.plot_dag(T1, view=True, coalesce_duplicates=True)
     # visualise.plot_dag(T1, view=True, coalesce_duplicates=True)
+    visualise.plot_network(T1, view=True)
 
 def mttkrp():
     vsI = UnknownSizeVectorSpace("I")
@@ -123,8 +121,8 @@ def func3():
     # visualise.plot_network(expr.tensor_expr, view=True)
 
 
-# func1()
-mttkrp()
+# mttkrp()
+func1()
 # tucker()
 # func2()
 # func3()

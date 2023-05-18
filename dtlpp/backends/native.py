@@ -578,32 +578,32 @@ class KernelBuilder:
     
     @_get_expression_r.register
     def _(self, expr: dtl.MulBinOp, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
-        lhsIndices = expr.lhs.type.indices
-        lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
-        rhsIndices = expr.rhs.type.indices
-        rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
-        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), lhsIndexMap, path)
-        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), rhsIndexMap, path)
+        # lhsIndices = expr.lhs.type.indices
+        # lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
+        # rhsIndices = expr.rhs.type.indices
+        # rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
+        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), indexMap, path)
+        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), indexMap, path)
         return SeqNode([l_sub_inst, r_sub_inst]), ExprMul(l_sub_expression, r_sub_expression)
     
     @_get_expression_r.register
     def _(self, expr: dtl.AddBinOp, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
-        lhsIndices = expr.lhs.type.indices
-        lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
-        rhsIndices = expr.rhs.type.indices
-        rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
-        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), lhsIndexMap, path)
-        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), rhsIndexMap, path)
+        # lhsIndices = expr.lhs.type.indices
+        # lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
+        # rhsIndices = expr.rhs.type.indices
+        # rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
+        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), indexMap, path)
+        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), indexMap, path)
         return SeqNode([l_sub_inst, r_sub_inst]), ExprAdd(l_sub_expression, r_sub_expression)
 
     @_get_expression_r.register
     def _(self, expr: dtl.SubBinOp, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
-        lhsIndices = expr.lhs.type.indices
-        lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
-        rhsIndices = expr.rhs.type.indices
-        rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
-        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), lhsIndexMap, path)
-        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), rhsIndexMap, path)
+        # lhsIndices = expr.lhs.type.indices
+        # lhsIndexMap = {i: v for i, v in indexMap.items() if i in lhsIndices}
+        # rhsIndices = expr.rhs.type.indices
+        # rhsIndexMap = {i: v for i, v in indexMap.items() if i in rhsIndices}
+        l_sub_inst, l_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["lhs"]), indexMap, path)
+        r_sub_inst, r_sub_expression = self._get_expression(traversal.operandLabelled(expr, ["rhs"]), indexMap, path)
         return SeqNode([l_sub_inst, r_sub_inst]), ExprSub(l_sub_expression, r_sub_expression)
 
     @_get_expression_r.register
@@ -615,11 +615,14 @@ class KernelBuilder:
         sub_inst, sub_expression = self._get_expression(traversal.operandLabelled(expr, ["expr"]), newMap, path)
         loop = SeqNode([sub_inst,
                         Accumulate(t_var, [], sub_expression)])
-        exprType = expr.expr.type
+        exprType :DTLType = expr.expr.type
         for i in expr.sum_indices:
             loop = Loop(newMap[i], exprType.spaceOf(i).dim, loop)
 
-        sum_inst = SeqNode([AssignTemp(t_var, ExprConst('0')), loop])
+        if not exprType.result.isSingular or not isinstance(exprType.result, dtl.ShapeType):
+            raise NotImplementedError(f"Index Sum over tuple tensors ({exprType.result}) is not supported: {str(expr)}")
+        make_temp = AssignTemp(t_var, ExprConst('0')) if exprType.result.isScalar  else InitTensor(t_var,  [d.dim for d in exprType.result.dims])
+        sum_inst = SeqNode([make_temp, loop])
         return sum_inst, ExprConst(t_var)
     
     def _init_tensor_for_all_tuple(self, exprs, result:dtl.ResultType, output_shape:dtl.DeindexFormatTypeHint, newMap: typing.Dict[dtl.Index, str]):
@@ -659,9 +662,9 @@ class KernelBuilder:
 
     @_get_expression_r.register
     def _(self, expr: dtl.ExprTuple, indexMap: typing.Dict[dtl.Index, str], path: typing.Tuple[str,...]):
-        tIndices = [e.type.indices for e in expr.exprs]
-        tIndexMaps = [{i: v for i,v in indexMap.items() if i in idxs} for idxs in tIndices]
-        tSubInsts, tSubExprs = zip(*[self._get_expression(traversal.operandLabelled(expr, ["exprs", i]), idxMap, path) for (i, e), idxMap in zip(enumerate(expr.exprs), tIndexMaps)])
+        # tIndices = [e.type.indices for e in expr.exprs]
+        # tIndexMaps = [{i: v for i,v in indexMap.items() if i in idxs} for idxs in tIndices]
+        tSubInsts, tSubExprs = zip(*[self._get_expression(traversal.operandLabelled(expr, ["exprs", i]), indexMap.copy(), path) for (i, e) in enumerate(expr.exprs)])
         return SeqNode(tSubInsts), tuple(tSubExprs)
 
     @_get_expression_r.register

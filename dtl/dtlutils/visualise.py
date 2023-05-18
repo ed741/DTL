@@ -2,6 +2,7 @@ import graphviz
 
 import dtl
 from dtl import *
+from dtl.dtlutils import traversal
 from dtl.dtlutils.traversal import postOrderPath, get_scope, allOperandsLabelled
 
 
@@ -36,7 +37,7 @@ def plot_dag(expr: typing.Union[dtl.Node, typing.Iterable[dtl.Node]], *, name="e
                   short_strs=short_strs,
                   skip_terminals=skip_terminals,
                   show_types=show_types)
-    dag.render(quiet_view=view)
+    dag.render(view=view)
 
 
 def _plot_dag(expr: dtl.Node, dag: graphviz.Digraph, seen: typing.Dict,
@@ -70,7 +71,7 @@ def _plot_dag(expr: dtl.Node, dag: graphviz.Digraph, seen: typing.Dict,
 def plot_network(expr: dtl.Expr, *, name="expression", view=False, **kwargs):
     network = graphviz.Digraph(name, **kwargs)
     _plot_network(expr, network)
-    network.render(quiet_view=view)
+    network.render(view=view)
 
 
 def _plot_network(expr: dtl.Expr, network):
@@ -96,26 +97,31 @@ def _plot_network(expr: dtl.Expr, network):
     postOrderPath(expr, add_vars)
     def add_edges(node, path):
         if isinstance(node, IndexExpr):
-            operand_idx = list(node.operands).index(node.tensor_expr)
-            for i, index in enumerate(node.tensor_indices):
-                scope = tuple(get_scope(expr, index, path))
-                if isinstance(node.tensor_expr, TensorVariable):
-                    keyA = node.tensor_expr, tuple(list(path)+[operand_idx])
+            operand_idx = 'expr' #list(node.operands).index(node.expr)
+            for i, index in enumerate(node.indices):
+                s = get_scope(expr, index, path)
+                scope = tuple(s) if s is not None else tuple([])
+                node_expr = node.expr
+                while(isinstance(node_expr, IndexBinding)): node_expr = node_expr.expr
+                if isinstance(node_expr, TensorVariable):
+                    keyA = node_expr, tuple(list(path)+[operand_idx])
                     keyB = index, scope
                     network.edge(names[keyA], names[keyB], arrowhead='none')
-                if isinstance(node.tensor_expr, DeindexExpr):
-                    keyA = node.tensor_expr.indices[i], tuple(list(path)+[operand_idx])
+                elif isinstance(node_expr, DeindexExpr):
+                    keyA = node_expr.indices[i], tuple(list(path)+[operand_idx])
                     keyB = index, scope
                     if keyA not in names:
                         print("dam")
                     if keyB not in names:
                         print("dam")
                     network.edge(names[keyA], names[keyB], arrowhead='none')
+                else:
+                    raise NotImplementedError(f"Unsupported Indexing of {type(node_expr)} node found")
         return node
     postOrderPath(expr, add_edges)
     if isinstance(expr, DeindexExpr):
-        for index in expr.indices:
-            network.node(str(index)+"out", label=str(expr.index_spaces[index]), shape='none')
+        for index in DeindexExpr.getIndices(expr.output_shape):
+            network.node(str(index)+"out", label=str(index), shape='none')
             network.edge(names[index,tuple([])], str(index)+"out", arrowhead='none')
     elif isinstance(expr, TensorVariable):
         for space in expr.tensor_space:

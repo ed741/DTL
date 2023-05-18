@@ -93,12 +93,10 @@ class MarginaliseFactor(dtl.Expr, PythonDtlNode):
                 ab = lambda_np[0,1:,:,:].transpose([1,0,2]).reshape(lambda_np.shape[-1],-1)
                 ba = lambda_np[1:, 0, :, :].reshape(-1,lambda_np.shape[-1])
                 bb = lambda_np[1:, 1:, :, :].transpose([0,2,1,3]).reshape(-1,lambda_np.shape[-1]*(lambda_np.shape[0]-1))
-                # print(f"Marg m:{args['_m_10'] if '_m_10' in args else args['_m_9']} slot:{slot_idx}")
                 if bb[0,0] !=0.0:
                     bbInv = np.linalg.inv(bb)
                 else:
                     bbInv = bb
-
                 abbbInv = np.matmul(ab, bbInv)
                 emarg = ea - np.matmul(abbbInv, eb)
                 lmarg = aa - np.matmul(abbbInv, ba)
@@ -204,14 +202,6 @@ Jacobians = TensorVariable(M_Measurements * VarVec * Factor_Connectivity * VarVe
 HMatrix = TensorVariable(M_Measurements * VarVec * Factor_Connectivity * VarVec, "HM")
 FactorInputZs = TensorVariable(M_Measurements * VarVec, "Z")
 FactorInputLambdas = TensorVariable(M_Measurements * lambdaTS, "L")
-
-# FactorBaseEtas = TensorVariable(M_Measurements*etaiTS, "FBE")
-
-# FactorBaseLambdas = TensorVariable(M_Measurements*lambdaiTS, "FBL")
-
-# SlotToEta = TensorVariable(Factor_Connectivity*etaTS*Factor_Connectivity*etaiTS, "SlotToEta")
-# SlotToLambda = TensorVariable(Factor_Connectivity*lambdaTS*Factor_Connectivity*lambdaiTS, "SlotToLambda")
-# Connectivity_Ones= TensorVariable(Factor_Connectivity, "One")
 
 FactorToVariableEtaMessages = TensorVariable(M_Measurements*Factor_Connectivity*etaTS, "FVEM")
 FactorToVariableLambdaMessages = TensorVariable(M_Measurements*Factor_Connectivity*lambdaTS, "FVLM")

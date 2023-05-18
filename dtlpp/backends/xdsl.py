@@ -110,6 +110,82 @@ def _(node: dtl.IndexSum, nodeMap=None, tensorVariables=None):
     nodeMap[node] = out
     return lines + [out], out
 
+@get_xdsl_dtl_version.register
+def _(node: dtl.AddBinOp, nodeMap=None, tensorVariables=None):
+    nodeMap = {} if nodeMap is None else nodeMap
+    tensorVariables = {} if tensorVariables is None else tensorVariables
+    if node in nodeMap: return [], nodeMap[node]
+
+    lhs_lines, lhs_expr = get_xdsl_dtl_version(node.lhs, nodeMap, tensorVariables)
+    rhs_lines, rhs_expr = get_xdsl_dtl_version(node.rhs, nodeMap, tensorVariables)
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.ScalarAddOp.build(operands=[lhs_expr, rhs_expr], result_types=[type])
+
+    nodeMap[node] = out
+    return lhs_lines + rhs_lines + [out], out
+
+@get_xdsl_dtl_version.register
+def _(node: dtl.SubBinOp, nodeMap=None, tensorVariables=None):
+    nodeMap = {} if nodeMap is None else nodeMap
+    tensorVariables = {} if tensorVariables is None else tensorVariables
+    if node in nodeMap: return [], nodeMap[node]
+
+    lhs_lines, lhs_expr = get_xdsl_dtl_version(node.lhs, nodeMap, tensorVariables)
+    rhs_lines, rhs_expr = get_xdsl_dtl_version(node.rhs, nodeMap, tensorVariables)
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.ScalarSubOp.build(operands=[lhs_expr, rhs_expr], result_types=[type])
+
+    nodeMap[node] = out
+    return lhs_lines + rhs_lines + [out], out
+
+@get_xdsl_dtl_version.register
+def _(node: dtl.MulBinOp, nodeMap=None, tensorVariables=None):
+    nodeMap = {} if nodeMap is None else nodeMap
+    tensorVariables = {} if tensorVariables is None else tensorVariables
+    if node in nodeMap: return [], nodeMap[node]
+
+    lhs_lines, lhs_expr = get_xdsl_dtl_version(node.lhs, nodeMap, tensorVariables)
+    rhs_lines, rhs_expr = get_xdsl_dtl_version(node.rhs, nodeMap, tensorVariables)
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.ScalarMulOp.build(operands=[lhs_expr, rhs_expr], result_types=[type])
+
+    nodeMap[node] = out
+    return lhs_lines + rhs_lines + [out], out
+
+@get_xdsl_dtl_version.register
+def _(node: dtl.ExprTuple, nodeMap=None, tensorVariables=None):
+    nodeMap = {} if nodeMap is None else nodeMap
+    tensorVariables = {} if tensorVariables is None else tensorVariables
+    if node in nodeMap: return [], nodeMap[node]
+
+    line_parts = []
+    expr_parts = []
+    for expr in node.exprs:
+        xdtl_lines, xdtl_expr = get_xdsl_dtl_version(expr, nodeMap, tensorVariables)
+        line_parts.extend(xdtl_lines)
+        expr_parts.append(xdtl_expr)
+
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.TupleOp.build(operands=[expr_parts], result_types=[type])
+
+    nodeMap[node] = out
+    return line_parts + [out], out
+
+@get_xdsl_dtl_version.register
+def _(node: dtl.IndexedExprTuple, nodeMap=None, tensorVariables=None):
+    nodeMap = {} if nodeMap is None else nodeMap
+    tensorVariables = {} if tensorVariables is None else tensorVariables
+    if node in nodeMap: return [], nodeMap[node]
+
+    lines, expr = get_xdsl_dtl_version(node.expr, nodeMap, tensorVariables)
+    type = DTLType_to_xdtl(node.type)
+    out = xdtl.IndexedTupleOp.build(operands=[expr], attributes={"index": builtin.IntAttr(node.n)}, result_types=[type])
+
+    nodeMap[node] = out
+    return lines + [out], out
+
+
+
 
 # @get_xdsl_dtl_version.register
 # def _(node: dtl.Literal):

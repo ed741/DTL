@@ -13,10 +13,12 @@ from xdsl.irdl import SingleBlockRegionDef
 
 i = Index('i')
 j = Index('j')
+k = Index('k')
 v5 = RealVectorSpace(5)
 v6 = RealVectorSpace(6)
 A = TensorVariable(v5*v5*v6, "A")
-expr = A[i,j,None].sum(j).forall(i)
+expr = ((A[i,j,k]+Literal(2))*Literal(3)-Literal(2)).sum(j).forall(k,i)
+expr, _ = ExprTuple.tupleOf(expr, Literal(10)[i:v5]).tuple()
 type = xdtl.DTLType_to_xdtl(expr.type)
 print("type")
 print(type)

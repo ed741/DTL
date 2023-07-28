@@ -4,12 +4,45 @@ import dtl
 import xdsl.dialects.builtin
 from dtl.dtlutils import traversal
 from xdsl.dialects import arith, builtin
-from xdsl.ir import SSAValue
+from xdsl.ir import SSAValue, BlockArgument
 from xdslDTL import dialect as xdtl
 
-
-
 import functools
+
+
+def get_xdsl_dtl_exec_version(expression: dtl.Expr,
+                              space_map: typing.Dict[dtl.UnknownSizeVectorSpace, SSAValue],
+                              arg_map: typing.Dict[dtl.Index, SSAValue],
+                              tensor_variables: typing.Dict[dtl.TensorVariable, BlockArgument],
+                              output
+                              ):
+    lines, expr = get_xdsl_dtl_version(expression, nodeMap=None, tensorVariables=tensor_variables)
+
+    spaces = []
+    space_lenghs = []
+    for s, l in space_map.items():
+        spaces.append(vectorSpace_to_xdtl(s))
+        space_lenghs.append(l)
+    context_type = xdtl.ExecuteContextType.new([builtin.ArrayAttr(spaces)])
+    execContext = xdtl.ExecuteContextOp.build(operands=space_lenghs, result_types=[context_type])
+    lines += [execContext]
+
+    arg_names = []
+    arg_values = []
+    for n, v in arg_map.items():
+        arg_names.append(xdtl.Index.new([builtin.StringAttr(n.name)]))
+        arg_values.append(v)
+    arg_type = xdtl.ExecuteArgsType.new([builtin.ArrayAttr(arg_names)])
+    execArgs = xdtl.ExecuteArgsOp.build(operands=arg_values, result_types=[arg_type])
+    lines += [execArgs]
+
+    execOp = xdtl.DenseExecuteTensorOp.build(operands=[expr, execContext, execArgs, output])
+    lines += [execOp]
+    return lines, execOp
+
+
+pass
+
 
 @functools.singledispatch
 def get_xdsl_dtl_version(node: dtl.Node, nodeMap=None, tensorVariables=None):
@@ -17,18 +50,20 @@ def get_xdsl_dtl_version(node: dtl.Node, nodeMap=None, tensorVariables=None):
     tensorVariables = {} if tensorVariables is None else tensorVariables
     raise ValueError
 
+
 @get_xdsl_dtl_version.register
 def _(node: dtl.Literal, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
     tensorVariables = {} if tensorVariables is None else tensorVariables
     if node in nodeMap: return [], nodeMap[node]
-    
+
     f = arith.Constant.from_float_and_width(node.f, builtin.f32)
     type = DTLType_to_xdtl(node.type)
     out = xdtl.ScalarConstOp.build(operands=[f], result_types=[type])
-    
+
     nodeMap[node] = out
     return [f, out], out
+
 
 @get_xdsl_dtl_version.register
 def _(node: dtl.TensorVariable, nodeMap=None, tensorVariables=None):
@@ -47,20 +82,20 @@ def _(node: dtl.IndexBinding, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
     tensorVariables = {} if tensorVariables is None else tensorVariables
     if node in nodeMap: return [], nodeMap[node]
-    
+
     bindingPairs = []
     for i, s in sorted(zip(node.indices, node.spaces), key=lambda p: p[0].name):
         idx = xdtl.Index.new([builtin.StringAttr(i.name)])
         vs = vectorSpace_to_xdtl(s)
         bindingPairs.append(xdtl.IndexToVectorSpaceMapPair.new([idx, vs]))
     binding = xdtl.IndexToVectorSpaceMap.new([builtin.ArrayAttr(bindingPairs)])
-    
+
     lines, expr = get_xdsl_dtl_version(node.expr, nodeMap, tensorVariables)
     type = DTLType_to_xdtl(node.type)
-    out = xdtl.IndexBindingOp.build(operands=[expr], attributes={"indices_map":binding}, result_types=[type])
-    
+    out = xdtl.IndexBindingOp.build(operands=[expr], attributes={"indices_map": binding}, result_types=[type])
+
     nodeMap[node] = out
-    return lines+[out], out
+    return lines + [out], out
 
 
 @get_xdsl_dtl_version.register
@@ -74,7 +109,7 @@ def _(node: dtl.IndexExpr, nodeMap=None, tensorVariables=None):
     lines, expr = get_xdsl_dtl_version(node.expr, nodeMap, tensorVariables)
     type = DTLType_to_xdtl(node.type)
     out = xdtl.IndexOp.build(operands=[expr], attributes={"indices": indexStruct}, result_types=[type])
-    
+
     nodeMap[node] = out
     return lines + [out], out
 
@@ -110,6 +145,7 @@ def _(node: dtl.IndexSum, nodeMap=None, tensorVariables=None):
     nodeMap[node] = out
     return lines + [out], out
 
+
 @get_xdsl_dtl_version.register
 def _(node: dtl.AddBinOp, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
@@ -123,6 +159,7 @@ def _(node: dtl.AddBinOp, nodeMap=None, tensorVariables=None):
 
     nodeMap[node] = out
     return lhs_lines + rhs_lines + [out], out
+
 
 @get_xdsl_dtl_version.register
 def _(node: dtl.SubBinOp, nodeMap=None, tensorVariables=None):
@@ -138,6 +175,7 @@ def _(node: dtl.SubBinOp, nodeMap=None, tensorVariables=None):
     nodeMap[node] = out
     return lhs_lines + rhs_lines + [out], out
 
+
 @get_xdsl_dtl_version.register
 def _(node: dtl.MulBinOp, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
@@ -151,6 +189,7 @@ def _(node: dtl.MulBinOp, nodeMap=None, tensorVariables=None):
 
     nodeMap[node] = out
     return lhs_lines + rhs_lines + [out], out
+
 
 @get_xdsl_dtl_version.register
 def _(node: dtl.ExprTuple, nodeMap=None, tensorVariables=None):
@@ -171,6 +210,7 @@ def _(node: dtl.ExprTuple, nodeMap=None, tensorVariables=None):
     nodeMap[node] = out
     return line_parts + [out], out
 
+
 @get_xdsl_dtl_version.register
 def _(node: dtl.IndexedExprTuple, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
@@ -183,8 +223,6 @@ def _(node: dtl.IndexedExprTuple, nodeMap=None, tensorVariables=None):
 
     nodeMap[node] = out
     return lines + [out], out
-
-
 
 
 # @get_xdsl_dtl_version.register
@@ -214,6 +252,7 @@ def DTLIndexing_to_xdtl(indices: tuple) -> xdtl.IndexStruct:
 
     return traversal.forallTupleTreeFold(indices, DTLIndex_to_xdtl, fold_DTLIndex_to_xdtl)
 
+
 def DTLType_to_xdtl(type: dtl.DTLType):
     pairs = []
     for i in sorted([i for i in type.indices], key=lambda i: i.name):
@@ -225,12 +264,14 @@ def DTLType_to_xdtl(type: dtl.DTLType):
     indexStruct = resultType_to_xdtl(type.result)
     return xdtl.TensorExprType([binding, indexStruct])
 
+
 def resultType_to_xdtl(result: dtl.ResultType):
     if isinstance(result, dtl.ShapeType):
         return xdtl.IndexShapeStruct.new([builtin.ArrayAttr([vectorSpace_to_xdtl(s) for s in result.dims])])
     elif isinstance(result, dtl.ResultTupleType):
         return xdtl.IndexTupleStruct.new([builtin.ArrayAttr([resultType_to_xdtl(r) for r in result.results])])
-    
+
+
 def vectorSpace_to_xdtl(space: dtl.VectorSpaceVariable):
     if isinstance(space, dtl.UnknownSizeVectorSpace):
         return xdtl.UnknownVectorSpace.new([builtin.StringAttr(space.name)])

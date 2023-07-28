@@ -2,6 +2,7 @@ from dtl import *
 from dtl.dtlutils import visualise
 from dtl.passes.names import make_Index_names_unique
 from dtl.dtlutils.traversal import postOrder
+from dtlpp.backends import native
 
 
 def func1():
@@ -20,7 +21,8 @@ def func1():
     # T2 = Lambda([A := TensorVariable("A"),B := TensorVariable("B")], (A[j, i]*Abs(B[j,i])|[i, j])[k]|[k])
     A = TensorVariable(vsA * vsR1, "A")
     B = TensorVariable(vsR1 * vsB, "B")
-    T1 = DeindexExpr((A[i,j] * B[j,k]), (i,k))
+    # T1 = DeindexExpr((A[i,j] * B[j,k]), (i,k))
+    T1 = (A[i,j] * B[j,k]).forall(i,k)
     C = TensorVariable(vsR1 * vsB, "C")
     # A = TensorVariable(None, "A")
     # B = TensorVariable(None, "B")
@@ -120,10 +122,32 @@ def func3():
     # visualise.plot_network(expr.tensor_expr.scalar_expr.scalar_expr.lhs.tensor_expr, view=True)
     # visualise.plot_network(expr.tensor_expr, view=True)
 
+def func4():
+    i, j, k = Index('i'), Index('j'), Index('k')
+    R10 = RealVectorSpace(10)
+    Q, S = UnknownSizeVectorSpace('Q'), UnknownSizeVectorSpace('S')
+    A, B = TensorVariable(Q * R10, 'A'), TensorVariable(R10 * S, 'B')
+    output = (A[i, j] * B[j, k]).sum(j).forall(i, k)
+
+    print("A:", A.type)
+    print("A[i,j]:", A[i,j].type)
+    print("(A[rs, j] * B[j, k]):", (A[i, j] * B[j, k]).type)
+    print("(A[i, j] * B[j, k]).sum(j):", (A[i, j] * B[j, k]).sum(j).type)
+    print("output:", output.type)
+    print("A,B:", ExprTuple((A,B)).type)
+    print("A[i, j], B:", Expr.exprInputConversion((A[i, j], B)).type)
+
+
+    visualise.plot_dag(output, view=True, short_strs=True, skip_terminals=True, label_edges=True)
+
+    builder = native.KernelBuilder(output, debug_comments=False)
+    print("native_test.3")
+    kernel = builder.build()
+
 
 # mttkrp()
-func1()
+# func1()
 # tucker()
 # func2()
 # func3()
-
+func4()

@@ -165,15 +165,16 @@ class CodeNode(abc.ABC):
 
 
 class Func():
-    def __init__(self, args, arg_shapes, child: CodeNode, results):
+    def __init__(self, args, arg_shapes, vector_space_args, child: CodeNode, results):
         self.args = args
         self.arg_shapes = arg_shapes
+        self.vector_space_args = vector_space_args
         self.child = child
         self.results = results
     
     def do(self, **kwargs):
-        if any(a not in kwargs for a in self.args):
-            raise ValueError(f"Arguments not satisfied.\n Provided: {str(list(kwargs.keys()))}\n needed: {self.args}")
+        if any(a not in kwargs for a in self.args) or any(a not in kwargs for a in self.vector_space_args):
+            raise ValueError(f"Arguments not satisfied.\n Provided: {str(list(kwargs.keys()))}\n needed: {self.args + self.vector_space_args}")
         for arg, shape in zip(self.args, self.arg_shapes):
             input = kwargs[arg]
             tshape = tuple(v.dim for v in shape)
@@ -193,14 +194,14 @@ class Func():
             else: raise ValueError("Internal Compiler Error: Return type is not ExpressionNode or tupleTree")
             
         instructions = []
-        instructions.append(f"def func({','.join(self.args)}):")
+        instructions.append(f"def func({','.join(self.args+[vs+':int' for vs in self.vector_space_args])}):")
         instructions.append(self.child.code(1))
         instructions.append(f"    return {ret(self.results)}")
         return "\n".join(instructions)
         
         
 class Loop(CodeNode):
-    def __init__(self, index: str, extent: int, child: CodeNode):
+    def __init__(self, index: str, extent: typing.Union[int, str], child: CodeNode):
         self.index = index
         self.extent = extent
         self.child = child
@@ -211,7 +212,7 @@ class Loop(CodeNode):
                f"{'    '*indent}#Done {self.index} loop"
 
     def do(self, args: typing.Dict[str, typing.Any]):
-        for i in range(self.extent):
+        for i in range(self.extent if isinstance(self.extent, int) else args[self.extent]):
             args[self.index] = i
             self.child.do(args)
             args.pop(self.index)
@@ -279,7 +280,7 @@ class Accumulate(CodeNode):
 
 
 class InitTensor(CodeNode):
-    def __init__(self, name: str, indices: typing.List[int]):
+    def __init__(self, name: str, indices: typing.List[typing.Union[int, str]]):
         self.name = name
         self.indices = indices
     
@@ -287,7 +288,8 @@ class InitTensor(CodeNode):
         return f"{'    ' * indent}{self.name}=np.zeros([{','.join(str(i) for i in self.indices)}])"
     
     def do(self, args: typing.Dict[str, typing.Any]):
-        args[self.name]= np.zeros(self.indices)
+        indices = [i if isinstance(i, int) else args[i] for i in self.indices]
+        args[self.name]= np.zeros(indices)
 
 class CodeComment(CodeNode):
     def __init__(self, comment: str):
@@ -317,11 +319,13 @@ class PythonDtlNode(Node, ABC):
         pass # return CodeNode, ExpressionNode
     
     def get_inputs(self, kernelBuilder: "KernelBuilder"):
-        s = frozenset()
+        tv = frozenset()
+        vs = frozenset()
         for child in traversal.allOperands(self.operands):
-            child_inputs = kernelBuilder.get_inputs(child)
-            s = s.union(child_inputs)
-        return s
+            child_tv, child_vs = kernelBuilder.get_inputs(child)
+            tv = tv.union(child_tv)
+            vs = vs.union(child_vs)
+        return tv, vs
 
             
 class InstantiationExprNode(dtl.Expr):
@@ -474,10 +478,16 @@ class KernelBuilder:
         tensorInputs = frozenset()
         indexInputs = {}
         inputIndexSpaces = {}
-        
-        tensorInputs = tensorInputs.union(self.get_inputs(self._expr))
+
+        tensorInputs, vectorSpaceInputs = self.get_inputs(self._expr)
         tensorInputs = [i for i in tensorInputs]
+        vectorSpaceInputs = [vs for vs in vectorSpaceInputs]
         tensorInputNames = [e.name for e in tensorInputs]
+        vectorSpaceInputNames = [e.name for e in vectorSpaceInputs]
+        if any(vs in tensorInputNames for vs in vectorSpaceInputNames):
+            raise ValueError(f"TensorVariable names and UnknownVectorSpaceVariable Names must be unique\n"
+                             f"found: Tensor Variables: {tensorInputNames}\n"
+                             f" Vector Space Variables: {vectorSpaceInputNames}")
         tensorInputShapes = [e.type.result.dims for e in tensorInputs]
         etype  = self._expr.type
         for i in etype.indices:
@@ -491,19 +501,21 @@ class KernelBuilder:
         inputNames = tensorInputNames + list(indexInputs.values())
         inputShapes = tensorInputShapes + [inputIndexSpaces[i] for i in indexInputs]
         
-        self.codeNode = Func(inputNames, inputShapes, exprCode, expression)
+        self.codeNode = Func(inputNames, inputShapes, vectorSpaceInputNames, exprCode, expression)
         print(self.codeNode.code())
         return self.codeNode.do
         
 
 
     @functools.singledispatchmethod
-    def get_inputs(self, expr):
-        s = frozenset()
+    def get_inputs(self, expr) -> tuple[frozenset, frozenset]:
+        tv = frozenset()
+        vs = frozenset()
         for child in traversal.allOperands(expr.operands):
-            child_inputs = self.get_inputs(child)
-            s = s.union(child_inputs)
-        return s
+            child_tv, child_vs = self.get_inputs(child)
+            tv = tv.union(child_tv)
+            vs = vs.union(child_vs)
+        return tv, vs
     
     @get_inputs.register
     def _(self, expr: dtl.TensorVariable):
@@ -511,8 +523,25 @@ class KernelBuilder:
         if expr not in self.registered_tensor_variables:
             shape = expr.type.result
             self.registered_tensor_variables[expr] = (tvar_name, shape)
-        return frozenset([expr])
-    
+
+        tv = frozenset([expr])
+        vs = frozenset()
+        for child in traversal.allOperands(expr.operands):
+            child_tv, child_vs = self.get_inputs(child)
+            tv = tv.union(child_tv)
+            vs = vs.union(child_vs)
+        return tv, vs
+
+    @get_inputs.register
+    def _(self, expr: dtl.UnknownSizeVectorSpace):
+        tv = frozenset()
+        vs = frozenset([expr])
+        for child in traversal.allOperands(expr.operands):
+            child_tv, child_vs = self.get_inputs(child)
+            tv = tv.union(child_tv)
+            vs = vs.union(child_vs)
+        return tv, vs
+
     @get_inputs.register
     def _(self, expr: PythonDtlNode):
         return expr.get_inputs(self)
@@ -632,7 +661,7 @@ class KernelBuilder:
             if not isinstance(exprs, ExpressionNode):
                 raise ValueError("Internal Compiler Error: mismatched result type from DeindexExpr to expressionNode produced")
             tvar_name = self._namer.next()
-            return InitTensor(tvar_name, [d.dim for d in result.dims]), AssignTensor(tvar_name, [newMap[o] if isinstance(o, dtl.Index) else ':' for o in output_shape], exprs), ExprConst(tvar_name)
+            return InitTensor(tvar_name, [d.name if isinstance(d, dtl.UnknownSizeVectorSpace) else d.dim for d in result.dims]), AssignTensor(tvar_name, [newMap[o] if isinstance(o, dtl.Index) else ':' for o in output_shape], exprs), ExprConst(tvar_name)
         
         elif isinstance(result, dtl.ResultTupleType):
             if not isinstance(output_shape, tuple):
@@ -654,7 +683,12 @@ class KernelBuilder:
         loop = SeqNode([sub_inst]+allAcc)
         childtype = expr.expr.type
         for i in expr.indices:
-            loop = Loop(newMap[i], childtype.spaceOf(i).dim, loop)
+            vs = childtype.spaceOf(i)
+            if isinstance(vs, dtl.UnknownSizeVectorSpace):
+                loop = Loop(newMap[i], childtype.spaceOf(i).name, loop)
+            else:
+                loop = Loop(newMap[i], childtype.spaceOf(i).dim, loop)
+
         inst.append(loop)
         code = SeqNode(inst)
         return code, exprs

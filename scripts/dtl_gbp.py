@@ -157,7 +157,9 @@ make_anchor_factor(0,0,0,0,0,100) # f0-v0
 # make_anchor_factor(1,1,10,10,-5,1) # f0-v0
 # make_anchor_factor(2,2,20,20,-5,10) # f0-v0
 # make_anchor_factor(3,3,30,30,-5,100) # f0-v0
-    
+
+print("Jacobians")
+print(JacobiansArray[1])
 
 
 

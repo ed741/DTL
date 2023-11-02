@@ -19,12 +19,12 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
     lines, expr = get_xdsl_dtl_version(expression, nodeMap=None, tensorVariables=tensor_variables)
 
     spaces = []
-    space_lenghs = []
+    space_lengths = []
     for s, l in space_map.items():
         spaces.append(vectorSpace_to_xdtl(s))
-        space_lenghs.append(l)
+        space_lengths.append(l)
     context_type = xdtl.ExecuteContextType.new([builtin.ArrayAttr(spaces)])
-    execContext = xdtl.ExecuteContextOp.build(operands=space_lenghs, result_types=[context_type])
+    execContext = xdtl.ExecuteContextOp.build(operands=[space_lengths], result_types=[context_type])
     lines += [execContext]
 
     arg_names = []
@@ -33,7 +33,7 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
         arg_names.append(xdtl.Index.new([builtin.StringAttr(n.name)]))
         arg_values.append(v)
     arg_type = xdtl.ExecuteArgsType.new([builtin.ArrayAttr(arg_names)])
-    execArgs = xdtl.ExecuteArgsOp.build(operands=arg_values, result_types=[arg_type])
+    execArgs = xdtl.ExecuteArgsOp.build(operands=[arg_values], result_types=[arg_type])
     lines += [execArgs]
 
     execOp = xdtl.DenseExecuteTensorOp.build(operands=[expr, execContext, execArgs, output])

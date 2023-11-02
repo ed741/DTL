@@ -128,6 +128,7 @@ def func4():
     Q, S = UnknownSizeVectorSpace('Q'), UnknownSizeVectorSpace('S')
     A, B = TensorVariable(Q * R10, 'A'), TensorVariable(R10 * S, 'B')
     output = (A[i, j] * B[j, k]).sum(j).forall(i, k)
+    output = MulBinOp(A.bind({i:Q, j:R10}).index([i,j]).bind({k:S}), B.bind({j:R10, k:S}).index([j,k]).bind({i:Q})).sum(j).deindex((i,k))
 
     print("A:", A.type)
     print("A[i,j]:", A[i,j].type)

@@ -1,5 +1,5 @@
 from xdsl.dialects import builtin
-from xdslDLT import dialect as dlt
+from xdsl.dialects.experimental import dlt as dlt
 
 str1 = builtin.StringAttr("hi")
 str2 = builtin.StringAttr("hi")

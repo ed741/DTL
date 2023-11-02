@@ -21,7 +21,7 @@ from xdsl.irdl import SingleBlockRegionDef
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
 from xdsl.printer import Printer
 from xdslDTL import compilec
-from xdslDTL.transform import DTLDenseRewriter
+from xdsl.transforms.experimental.lower_dtl import DTLDenseRewriter
 
 i = Index('i')
 j = Index('j')

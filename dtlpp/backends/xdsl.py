@@ -5,7 +5,7 @@ import xdsl.dialects.builtin
 from dtl.dtlutils import traversal
 from xdsl.dialects import arith, builtin
 from xdsl.ir import SSAValue, BlockArgument
-from xdslDTL import dialect as xdtl
+from xdsl.dialects.experimental import dtl as xdtl
 
 import functools
 

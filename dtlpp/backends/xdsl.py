@@ -3,8 +3,10 @@ import typing
 import dtl
 import xdsl.dialects.builtin
 from dtl.dtlutils import traversal
+from xdsl.builder import Builder
 from xdsl.dialects import arith, builtin
-from xdsl.ir import SSAValue, BlockArgument
+from xdsl.ir import SSAValue, BlockArgument, Block
+from xdsl.dialects.linalg import Generic
 from xdsl.dialects.experimental import dtl as xdtl
 
 import functools
@@ -13,32 +15,69 @@ import functools
 def get_xdsl_dtl_exec_version(expression: dtl.Expr,
                               space_map: typing.Dict[dtl.UnknownSizeVectorSpace, SSAValue],
                               arg_map: typing.Dict[dtl.Index, SSAValue],
-                              tensor_variables: typing.Dict[dtl.TensorVariable, BlockArgument],
-                              output
+                              tensor_variables: typing.Dict[dtl.TensorVariable, tuple[SSAValue,list[str]]],
+                              outputs: list[tuple[SSAValue, list[str]]]
                               ):
-    lines, expr = get_xdsl_dtl_version(expression, nodeMap=None, tensorVariables=tensor_variables)
+    block = Block()
 
-    spaces = []
-    space_lengths = []
+
+
+    extent_names = []
+    extent_args = []
     for s, l in space_map.items():
-        spaces.append(vectorSpace_to_xdtl(s))
-        space_lengths.append(l)
-    context_type = xdtl.ExecuteContextType.new([builtin.ArrayAttr(spaces)])
-    execContext = xdtl.ExecuteContextOp.build(operands=[space_lengths], result_types=[context_type])
-    lines += [execContext]
+        space = vectorSpace_to_xdtl(s)
+        assert isinstance(space, xdtl.UnknownVectorSpace)
+        extent_names.append(space)
+        extent_args.append(l)
+    context_type = xdtl.ExecuteContextType.new([builtin.ArrayAttr(extent_names)])
+    execContext = xdtl.ExecuteContextOp.build(operands=[extent_args], result_types=[context_type])
 
-    arg_names = []
-    arg_values = []
+    index_names = []
+    index_values = []
     for n, v in arg_map.items():
-        arg_names.append(xdtl.Index.new([builtin.StringAttr(n.name)]))
-        arg_values.append(v)
-    arg_type = xdtl.ExecuteArgsType.new([builtin.ArrayAttr(arg_names)])
-    execArgs = xdtl.ExecuteArgsOp.build(operands=[arg_values], result_types=[arg_type])
-    lines += [execArgs]
+        index_names.append(xdtl.Index.new([builtin.StringAttr(n.name)]))
+        index_values.append(v)
+    arg_type = xdtl.ExecuteArgsType.new([builtin.ArrayAttr(index_names)])
+    execArgs = xdtl.ExecuteArgsOp.build(operands=[index_values], result_types=[arg_type])
 
-    execOp = xdtl.DenseExecuteTensorOp.build(operands=[expr, execContext, execArgs, output])
-    lines += [execOp]
-    return lines, execOp
+
+    output_tensors = []
+    output_tensors_dim_names = []
+    for ssa, idx_names in outputs:
+        dims = builtin.ArrayAttr([builtin.StringAttr(i) for i in idx_names])
+        output_tensors_dim_names.append(dims)
+        output_tensors.append(ssa)
+    output_tensors_type = xdtl.ExecuteOutputType.new([builtin.ArrayAttr(output_tensors_dim_names)])
+    execOutputs = xdtl.ExecuteOutputOp.build(operands=[output_tensors], result_types=[output_tensors_type])
+
+
+    tensor_arg_indices = []
+    tensor_arg_base_types = []
+    tensor_args = []
+    internal_tensor_variables = {}
+    for i, (tensor_var, (ssa_val, idxs)) in enumerate(tensor_variables.items()):
+        assert tensor_var.type.nResults == 1
+        assert len(idxs) == tensor_var.type.result.nDims
+        tensor_args.append(ssa_val)
+        tensor_arg_indices.append(builtin.ArrayAttr([builtin.StringAttr(i) for i in idxs]))
+        tensor_arg_base_types.append(ssa_val.type.contents_type.get_single_element().base_type)
+        arg = block.insert_arg(ssa_val.type, i)
+        internal_tensor_variables[tensor_var] = (arg, idxs)
+
+
+    lines, expr = get_xdsl_dtl_version(expression, nodeMap=None, tensorVariables=internal_tensor_variables)
+    block.add_ops(lines)
+    yield_op = xdtl.ExecuteYieldOp.build(operands=[expr])
+    block.add_op(yield_op)
+
+    execOp = xdtl.DenseExecuteTensorOp.build(regions=[[block]],
+                                             attributes={"tensor_arg_indices": builtin.ArrayAttr(tensor_arg_indices),
+                                                         "tensor_arg_base_types": builtin.ArrayAttr(tensor_arg_base_types)
+                                                         },
+                                             operands=[execContext, execArgs, execOutputs, tensor_args],)
+
+    execOp.verify()
+    return [execContext, execArgs, execOutputs], execOp
 
 
 pass
@@ -72,7 +111,7 @@ def _(node: dtl.TensorVariable, nodeMap=None, tensorVariables=None):
     if node in nodeMap: return [], nodeMap[node]
 
     type = DTLType_to_xdtl(node.type)
-    out = xdtl.DenseBackedTensorOp.build(operands=[tensorVariables[node]], result_types=[type])
+    out = xdtl.DenseBackedTensorOp.build(operands=[tensorVariables[node][0]], result_types=[type])
     nodeMap[node] = out
     return [out], out
 
@@ -238,6 +277,8 @@ def DTLIndexing_to_xdtl(indices: tuple) -> xdtl.IndexStruct:
             return xdtl.Index.new([builtin.StringAttr(idx.name)])
         elif isinstance(idx, dtl.VectorSpaceVariable):
             return vectorSpace_to_xdtl(idx)
+        else:
+            raise NotImplementedError()
 
     def fold_DTLIndex_to_xdtl(children):
         if len(children) == 0:

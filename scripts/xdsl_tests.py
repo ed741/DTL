@@ -4,18 +4,19 @@ import subprocess
 import tempfile
 from io import StringIO
 
-import dtl
-import xdsl.dialects.arith
+# import xdsl.dialects.arith
 from dtl import *
 from dtl.dag import RealVectorSpace, Index
 import dtlpp.backends.xdsl as xdtl
 import numpy as np
 
 from dtl.dtlutils import visualise
+from dtlpp.backends import native
 from xdsl import printer, ir
-from xdsl.dialects import memref
-from xdsl.dialects.builtin import Float64Type, f32, ModuleOp
+from xdsl.dialects import memref, arith
+from xdsl.dialects.builtin import Float64Type, f32, ModuleOp, StringAttr, IntegerAttr
 from xdsl.dialects.func import FuncOp, Return
+from xdsl.dialects.experimental import dlt
 from xdsl.ir import SSAValue, Region
 from xdsl.irdl import SingleBlockRegionDef
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
@@ -34,6 +35,12 @@ vQ = UnknownSizeVectorSpace("Q")
 A = TensorVariable(vQ*v10, "A")
 B = TensorVariable(v10*vS, "B")
 expr = (A[i,j]*B[j,k]).sum(j).forall(i,k)
+expr = A[i,None].tupled_with(A[j, None]).deindex(((v10, i), (i, j, v10)))
+# expr = A[i,None].tupled_with(A[j, None].deindex((j, v10))).deindex(((v10, i), (i, vQ, v10)))
+
+builder = native.KernelBuilder(expr, debug_comments=False)
+kernel = builder.build()
+print(kernel)
 # expr = ((A[i,j,k])).sum(j).forall(i,k)
 # expr, _ = ExprTuple.tupleOf(expr, Literal(10)[i:v5]).tuple()
 print("expr: "+str(expr))
@@ -46,16 +53,28 @@ print(type)
 # module = ModuleOp([])
 # block = module.body.block
 block = ir.Block()
-a = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,5]), 0)
-b = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,6]), 1)
-vS_len = block.insert_arg(xdsl.dialects.builtin.i32, 2)
-vQ_len = block.insert_arg(xdsl.dialects.builtin.i32, 3)
+# a = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,5]), 0)
+v10_len_attr = IntegerAttr.from_int_and_width(5,64)
+vQ_len_attr = IntegerAttr.from_int_and_width(5,64)
+vS_len_attr = IntegerAttr.from_int_and_width(6,64)
+
+a = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("vQ"), vQ_len_attr])), dlt.DimensionAttr(tuple([StringAttr("V10"), v10_len_attr]))]), f32]))])), 0)
+# b = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,6]), 1)
+b = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("V10"), v10_len_attr])), dlt.DimensionAttr(tuple([StringAttr("vS"), vS_len_attr]))]), f32]))])), 1)
+vS_len = arith.Constant(vS_len_attr)
+vQ_len = arith.Constant(vQ_len_attr)
+# vS_len = block.insert_arg(xdsl.dialects.builtin.i32, 2)
+# vQ_len = block.insert_arg(xdsl.dialects.builtin.i32, 3)
 # i_val = block.insert_arg(xdsl.dialects.builtin.i32, 4)
-mem = block.insert_arg(memref.MemRefType.from_element_type_and_shape(f32, (5,6)), 4)
+block.add_op(vS_len)
+block.add_op(vQ_len)
+
+out = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("vQ"), vQ_len_attr])), dlt.DimensionAttr(tuple([StringAttr("vS"), vS_len_attr]))]), f32]))])), 2)
+# mem = block.insert_arg(memref.MemRefType.from_element_type_and_shape(f32, (5,6)), 4)
 
 # lines, output = xdtl.get_xdsl_dtl_version(expr, tensorVariables={A:a})
 # lines, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:vS_len, vQ:vQ_len}, arg_map={i:i_val}, tensor_variables={A:a,B:b}, output=mem)
-lines, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:vS_len, vQ:vQ_len}, arg_map={}, tensor_variables={A:a,B:b}, output=mem)
+exec, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:SSAValue.get(vS_len), vQ:SSAValue.get(vQ_len)}, arg_map={}, tensor_variables={A:(a,["vQ", "V10"]),B:(b,["V10", "vS"])}, outputs=[(out,["vQ", "vS"])])
 ret = Return()
 
 #TEST BLOCK
@@ -65,8 +84,8 @@ ret = Return()
 # ret = Return(const_int32_1)
 
 
-
-block.add_ops(lines+[ret])
+block.add_ops(exec)
+block.add_ops([output, ret])
 
 
 
@@ -84,6 +103,9 @@ func = FuncOp.from_region("foo", argTypes, retTypes, region)
 # block.verify()
 #
 print("Module???")
+
+
+
 print(func)
 
 applier = PatternRewriteWalker(GreedyRewritePatternApplier(

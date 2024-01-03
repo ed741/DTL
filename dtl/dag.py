@@ -527,6 +527,10 @@ class Expr(Node, abc.ABC):
             return tuple([IndexedExprTuple(self, i) for i in range(self.type.result.tupleSize)])
         else:
             raise ValueError("Cannot make tuple from expr with type " + str(self.type))
+
+    def tupled_with(self, *exprs: "ExprTypeHint"):
+        expressions = [self] + list(exprs)
+        return ExprTuple.tupleOf(*expressions)
     
     def forall(self, *indices: Index) -> "DeindexExpr":
         exprType = self.type

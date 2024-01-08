@@ -646,7 +646,14 @@ class KernelBuilder:
                         Accumulate(t_var, [], sub_expression)])
         exprType :DTLType = expr.expr.type
         for i in expr.sum_indices:
-            loop = Loop(newMap[i], exprType.spaceOf(i).dim, loop)
+            space = exprType.spaceOf(i)
+            if isinstance(space, dtl.VectorSpace):
+                extent = space.dim
+            elif isinstance(space, dtl.UnknownSizeVectorSpace):
+                extent = space.name
+            else:
+                raise TypeError("Unsupported space type")
+            loop = Loop(newMap[i], extent, loop)
 
         if not exprType.result.isSingular or not isinstance(exprType.result, dtl.ShapeType):
             raise NotImplementedError(f"Index Sum over tuple tensors ({exprType.result}) is not supported: {str(expr)}")

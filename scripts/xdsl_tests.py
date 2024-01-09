@@ -14,7 +14,7 @@ from dtl.dtlutils import visualise
 from dtlpp.backends import native
 from xdsl import printer, ir
 from xdsl.dialects import memref, arith
-from xdsl.dialects.builtin import Float64Type, f32, ModuleOp, StringAttr, IntegerAttr
+from xdsl.dialects.builtin import Float64Type, f32, ModuleOp, StringAttr, IntegerAttr, IndexType
 from xdsl.dialects.func import FuncOp, Return
 from xdsl.dialects.experimental import dlt
 from xdsl.ir import SSAValue, Region
@@ -35,8 +35,9 @@ vQ = UnknownSizeVectorSpace("Q")
 A = TensorVariable(vQ*v10, "A")
 B = TensorVariable(v10*vS, "B")
 expr = (A[i,j]*B[j,k]).sum(j).forall(i,k)
-expr = A[i,None].tupled_with(A[j, k].sum(k)).deindex(((v10, i), (i, j)))
-expr = A[i,None].tupled_with(A[j, None].deindex((j, v10))).deindex(((v10, i), (i, vQ, v10)))
+# expr = A[i,None].tupled_with(A[j, k].sum(k)).deindex(((v10, i), (i, j)))
+# expr = A[i,None].tupled_with(A[j, None].deindex((j, v10))).deindex(((v10, i), (i, vQ, v10)))
+# expr = A[i:vS, j:v10].deindex((vQ, i, j, v10))
 
 builder = native.KernelBuilder(expr, debug_comments=False)
 kernel = builder.build()
@@ -58,11 +59,11 @@ v10_len_attr = IntegerAttr.from_int_and_width(5,64)
 vQ_len_attr = IntegerAttr.from_int_and_width(5,64)
 vS_len_attr = IntegerAttr.from_int_and_width(6,64)
 
-a = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("vQ"), vQ_len_attr])), dlt.DimensionAttr(tuple([StringAttr("V10"), v10_len_attr]))]), f32]))])), 0)
+a = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(StringAttr("vQ"), vQ_len_attr), dlt.DimensionAttr(StringAttr("V10A"), v10_len_attr)]), f32]))])), 0)
 # b = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,6]), 1)
-b = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("V10"), v10_len_attr])), dlt.DimensionAttr(tuple([StringAttr("vS"), vS_len_attr]))]), f32]))])), 1)
-vS_len = arith.Constant(vS_len_attr)
-vQ_len = arith.Constant(vQ_len_attr)
+b = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(StringAttr("V10B"), v10_len_attr), dlt.DimensionAttr(StringAttr("vS"), vS_len_attr)]), f32]))])), 1)
+vS_len = arith.Constant(vS_len_attr, IndexType())
+vQ_len = arith.Constant(vQ_len_attr, IndexType())
 # vS_len = block.insert_arg(xdsl.dialects.builtin.i32, 2)
 # vQ_len = block.insert_arg(xdsl.dialects.builtin.i32, 3)
 # i_val = block.insert_arg(xdsl.dialects.builtin.i32, 4)
@@ -74,7 +75,7 @@ out = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetA
 
 # lines, output = xdtl.get_xdsl_dtl_version(expr, tensorVariables={A:a})
 # lines, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:vS_len, vQ:vQ_len}, arg_map={i:i_val}, tensor_variables={A:a,B:b}, output=mem)
-exec, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:SSAValue.get(vS_len), vQ:SSAValue.get(vQ_len)}, arg_map={}, tensor_variables={A:(a,["vQ", "V10"]),B:(b,["V10", "vS"])}, outputs=[(out,["vQ", "vS"])])
+exec, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:SSAValue.get(vS_len), vQ:SSAValue.get(vQ_len)}, arg_map={}, tensor_variables={A:(a,["vQ", "V10A"]),B:(b,["V10B", "vS"])}, outputs=[(out,["vQ", "vS"])])
 ret = Return()
 
 #TEST BLOCK
@@ -114,7 +115,13 @@ applier = PatternRewriteWalker(GreedyRewritePatternApplier(
 
 applier.rewrite_module(func)
 
-compilec.compile([func], "./tmp/libxdtl10.o")
+print("DTL -> DLT")
+print(func)
+print("DLT->???")
+module = ModuleOp([dlt.LayoutScopeOp([func])])
+module.verify()
+
+compilec.compile(module, "./tmp/libxdtl10.o")
 # print("args")
 # print(func.args)
 # print("results")

@@ -13,16 +13,17 @@ import numpy as np
 from dtl.dtlutils import visualise
 from dtlpp.backends import native
 from xdsl import printer, ir
-from xdsl.dialects import memref, arith
+from xdsl.dialects import memref, arith, builtin
 from xdsl.dialects.builtin import Float64Type, f32, ModuleOp, StringAttr, IntegerAttr, IndexType
-from xdsl.dialects.func import FuncOp, Return
+from xdsl.dialects.func import FuncOp, Return, Call
 from xdsl.dialects.experimental import dlt
 from xdsl.ir import SSAValue, Region
 from xdsl.irdl import SingleBlockRegionDef
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
 from xdsl.printer import Printer
+from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter
 from xdslDTL import compilec
-from xdsl.transforms.experimental.lower_dtl import DTLDenseRewriter
+from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
 
 i = Index('i')
 j = Index('j')
@@ -39,29 +40,39 @@ expr = (A[i,j]*B[j,k]).sum(j).forall(i,k)
 # expr = A[i,None].tupled_with(A[j, None].deindex((j, v10))).deindex(((v10, i), (i, vQ, v10)))
 # expr = A[i:vS, j:v10].deindex((vQ, i, j, v10))
 
-builder = native.KernelBuilder(expr, debug_comments=False)
-kernel = builder.build()
-print(kernel)
-# expr = ((A[i,j,k])).sum(j).forall(i,k)
-# expr, _ = ExprTuple.tupleOf(expr, Literal(10)[i:v5]).tuple()
-print("expr: "+str(expr))
+print("=== input DTL:")
+print(expr)
 print("expr type: "+str(expr.type))
 
+
+print("=== python native reference implementation:")
+builder = native.KernelBuilder(expr, debug_comments=False)
+kernel = builder.build()
+print(builder.codeNode.code())
+
+
+print("=== xdsl.DTL:")
 type = xdtl.DTLType_to_xdtl(expr.type)
-print("type")
+print("type:")
 print(type)
 
 # module = ModuleOp([])
 # block = module.body.block
 block = ir.Block()
 # a = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,5]), 0)
-v10_len_attr = IntegerAttr.from_int_and_width(5,64)
+# v10_len_attr = IntegerAttr.from_int_and_width(5,64)
+
+
+a = block.insert_arg(dlt.PtrType(
+    dlt.TypeType([([], [("vQ", "Q"),("V10A", 10)], f32)]
+    )).with_layout_name("a"), 0)
+# b = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,6]), 1)
+b = block.insert_arg(dlt.PtrType(
+    dlt.TypeType([([], [("V10B", 10), ("vS", "S")], f32)]
+    )).with_layout_name("b"), 1)
+
 vQ_len_attr = IntegerAttr.from_int_and_width(5,64)
 vS_len_attr = IntegerAttr.from_int_and_width(6,64)
-
-a = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(StringAttr("vQ"), vQ_len_attr), dlt.DimensionAttr(StringAttr("V10A"), v10_len_attr)]), f32]))])), 0)
-# b = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,6]), 1)
-b = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(StringAttr("V10B"), v10_len_attr), dlt.DimensionAttr(StringAttr("vS"), vS_len_attr)]), f32]))])), 1)
 vS_len = arith.Constant(vS_len_attr, IndexType())
 vQ_len = arith.Constant(vQ_len_attr, IndexType())
 # vS_len = block.insert_arg(xdsl.dialects.builtin.i32, 2)
@@ -70,7 +81,7 @@ vQ_len = arith.Constant(vQ_len_attr, IndexType())
 block.add_op(vS_len)
 block.add_op(vQ_len)
 
-out = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("vQ"), vQ_len_attr])), dlt.DimensionAttr(tuple([StringAttr("vS"), vS_len_attr]))]), f32]))])), 2)
+out = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("vQ"), vQ_len_attr])), dlt.DimensionAttr(tuple([StringAttr("vS"), vS_len_attr]))]), f32]))])).with_layout_name("out"), 2)
 # mem = block.insert_arg(memref.MemRefType.from_element_type_and_shape(f32, (5,6)), 4)
 
 # lines, output = xdtl.get_xdsl_dtl_version(expr, tensorVariables={A:a})
@@ -86,6 +97,11 @@ ret = Return()
 
 
 block.add_ops(exec)
+init_inner = dlt.AllocOp(operands=[[],[]], attributes={"dynamic_dimensions":builtin.ArrayAttr([])}, result_types=[a.type.as_base()])
+block.add_op(init_inner)
+callinner = Call("foo", [init_inner, b, out],[])
+block.add_op(callinner)
+
 block.add_ops([output, ret])
 
 
@@ -96,30 +112,42 @@ argTypes = [arg.type for arg in block.args]
 retTypes = [r.type for r in ret.operands]
 # retTypes = []
 func = FuncOp.from_region("foo", argTypes, retTypes, region)
+
+inits = [dlt.AllocOp(operands=[[],[]], attributes={"dynamic_dimensions":builtin.ArrayAttr([])}, result_types=[t.as_base()]) for t in argTypes]
+
+call = Call("foo", inits,[])
+call2 = Call("foo", inits,[])
+module = ModuleOp([dlt.LayoutScopeOp([func] + inits + [call, call2])])
+module.verify()
 # module = ModuleOp([func])
 #
 # print("lines:")
 # p = printer.Printer()
 # p.print(block)
 # block.verify()
-#
-print("Module???")
+print(module)
 
-
-
-print(func)
-
-applier = PatternRewriteWalker(GreedyRewritePatternApplier(
+print("=== DTL -> DLT")
+dtl_to_dlt_applier = PatternRewriteWalker(GreedyRewritePatternApplier(
     [DTLDenseRewriter()]),
     walk_regions_first=False)
 
-applier.rewrite_module(func)
+dtl_to_dlt_applier.rewrite_module(module)
 
-print("DTL -> DLT")
-print(func)
-print("DLT->???")
-module = ModuleOp([dlt.LayoutScopeOp([func])])
+print(module)
 module.verify()
+
+print("=== DLT->???")
+dlt_to_llvm_applier = PatternRewriteWalker(GreedyRewritePatternApplier(
+    [DLTLayoutRewriter()]),
+    walk_regions_first=False)
+
+dlt_to_llvm_applier.rewrite_module(module)
+
+print(module)
+
+print("=== llvm -> compiler")
+
 
 compilec.compile(module, "./tmp/libxdtl10.o")
 # print("args")

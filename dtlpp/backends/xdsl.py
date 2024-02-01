@@ -7,7 +7,7 @@ from xdsl.builder import Builder
 from xdsl.dialects import arith, builtin
 from xdsl.ir import SSAValue, BlockArgument, Block
 from xdsl.dialects.linalg import Generic
-from xdsl.dialects.experimental import dtl as xdtl
+from xdsl.dialects.experimental import dtl as xdtl, dlt
 
 import functools
 
@@ -58,8 +58,19 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
     for i, (tensor_var, (ssa_val, idxs)) in enumerate(tensor_variables.items()):
         assert tensor_var.type.nResults == 1
         assert len(idxs) == tensor_var.type.result.nDims
+        dlt_dimensions = []
+        for idx, vs in zip(idxs, tensor_var.tensor_space.spaces):
+            if isinstance(vs, dtl.UnknownSizeVectorSpace):
+                extent = vs.name
+            elif isinstance(vs, dtl.VectorSpace):
+                extent = vs.dim
+            else:
+                raise NotImplementedError(f"Vector space: {vs} not yet implemented")
+            dlt_dimensions.append(dlt.DimensionAttr(idx, extent))
+
+
         tensor_args.append(ssa_val)
-        tensor_arg_indices.append(builtin.ArrayAttr([builtin.StringAttr(i) for i in idxs]))
+        tensor_arg_indices.append(builtin.ArrayAttr(dlt_dimensions))
         tensor_arg_base_types.append(ssa_val.type.contents_type.get_single_element().base_type)
         arg = block.insert_arg(ssa_val.type, i)
         internal_tensor_variables[tensor_var] = (arg, idxs)

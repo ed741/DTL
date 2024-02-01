@@ -470,10 +470,9 @@ class KernelBuilder:
         self.debug_comments = debug_comments
     
     def build(self):
-        print("buildA")
         # self._expr = make_Index_names_unique_CSE(self._expr)
         # visualise.plot_dag(self._expr, view=True, label_edges=True, short_strs=True, skip_terminals=False, show_types=True)
-        print(str(self._expr))
+        # print(str(self._expr))
         
         tensorInputs = frozenset()
         indexInputs = {}
@@ -502,7 +501,7 @@ class KernelBuilder:
         inputShapes = tensorInputShapes + [inputIndexSpaces[i] for i in indexInputs]
         
         self.codeNode = Func(inputNames, inputShapes, vectorSpaceInputNames, exprCode, expression)
-        print(self.codeNode.code())
+        # print(self.codeNode.code())
         return self.codeNode.do
         
 

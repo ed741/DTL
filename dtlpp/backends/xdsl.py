@@ -23,33 +23,50 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
 
 
     extent_names = []
-    extent_args = []
+    # extent_args = []
     for s, l in space_map.items():
         space = vectorSpace_to_xdtl(s)
         assert isinstance(space, xdtl.UnknownVectorSpace)
         extent_names.append(space)
-        extent_args.append(l)
-    context_type = xdtl.ExecuteContextType.new([builtin.ArrayAttr(extent_names)])
-    execContext = xdtl.ExecuteContextOp.build(operands=[extent_args], result_types=[context_type])
+        # extent_args.append(l)
+    # context_type = xdtl.ExecuteContextType.new([builtin.ArrayAttr(extent_names)])
+    # execContext = xdtl.ExecuteContextOp.build(operands=[extent_args], result_types=[context_type])
 
-    index_names = []
-    index_values = []
-    for n, v in arg_map.items():
-        index_names.append(xdtl.Index.new([builtin.StringAttr(n.name)]))
-        index_values.append(v)
-    arg_type = xdtl.ExecuteArgsType.new([builtin.ArrayAttr(index_names)])
-    execArgs = xdtl.ExecuteArgsOp.build(operands=[index_values], result_types=[arg_type])
+    # index_names = []
+    # index_values = []
+    # for n, v in arg_map.items():
+    #     index_names.append(xdtl.Index.new([builtin.StringAttr(n.name)]))
+    #     index_values.append(v)
+    # arg_type = xdtl.ExecuteArgsType.new([builtin.ArrayAttr(index_names)])
+    # execArgs = xdtl.ExecuteArgsOp.build(operands=[index_values], result_types=[arg_type])
 
 
-    output_tensors = []
+    assert isinstance(expression.type.result, dtl.ShapeType) or (
+        isinstance(expression.type.result, dtl.ResultTupleType) and
+        all(isinstance(result, dtl.ShapeType) for result in expression.type.result.results))
+    if isinstance(expression.type.result, dtl.ShapeType):
+        output_shapes = [expression.type.result]
+    else:
+        output_shapes = expression.type.result.results
+
+    assert len(output_shapes) == len(outputs)
     output_tensors_dim_names = []
-    for ssa, idx_names in outputs:
-        dims = builtin.ArrayAttr([builtin.StringAttr(i) for i in idx_names])
-        output_tensors_dim_names.append(dims)
-        output_tensors.append(ssa)
-    output_tensors_type = xdtl.ExecuteOutputType.new([builtin.ArrayAttr(output_tensors_dim_names)])
-    execOutputs = xdtl.ExecuteOutputOp.build(operands=[output_tensors], result_types=[output_tensors_type])
-
+    output_base_types = []
+    for shape, (ssa, idx_names) in zip(output_shapes, outputs):
+        dlt_dimensions = []
+        for idx, vs in zip(idx_names, shape.dims):
+            if isinstance(vs, dtl.UnknownSizeVectorSpace):
+                if xdtl.UnknownVectorSpace(vs.name) in extent_names:
+                    extent = dlt.InitDefinedExtentAttr(vs.name)
+                else:
+                    extent = dlt.DynamicExtentAttr(vs.name)
+            elif isinstance(vs, dtl.VectorSpace):
+                extent = dlt.StaticExtentAttr(vs.dim)
+            else:
+                raise NotImplementedError(f"Vector space: {vs} not yet implemented")
+            dlt_dimensions.append(dlt.DimensionAttr(idx, extent))
+        output_tensors_dim_names.append(builtin.ArrayAttr(dlt_dimensions))
+        output_base_types.append(ssa.type.contents_type.get_single_element().base_type)
 
     tensor_arg_indices = []
     tensor_arg_base_types = []
@@ -61,13 +78,15 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
         dlt_dimensions = []
         for idx, vs in zip(idxs, tensor_var.tensor_space.spaces):
             if isinstance(vs, dtl.UnknownSizeVectorSpace):
-                extent = vs.name
+                if xdtl.UnknownVectorSpace(vs.name) in extent_names:
+                    extent = dlt.InitDefinedExtentAttr(vs.name)
+                else:
+                    extent = dlt.DynamicExtentAttr(vs.name)
             elif isinstance(vs, dtl.VectorSpace):
-                extent = vs.dim
+                extent = dlt.StaticExtentAttr(vs.dim)
             else:
                 raise NotImplementedError(f"Vector space: {vs} not yet implemented")
             dlt_dimensions.append(dlt.DimensionAttr(idx, extent))
-
 
         tensor_args.append(ssa_val)
         tensor_arg_indices.append(builtin.ArrayAttr(dlt_dimensions))
@@ -81,14 +100,24 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
     yield_op = xdtl.ExecuteYieldOp.build(operands=[expr])
     block.add_op(yield_op)
 
-    execOp = xdtl.DenseExecuteTensorOp.build(regions=[[block]],
-                                             attributes={"tensor_arg_indices": builtin.ArrayAttr(tensor_arg_indices),
-                                                         "tensor_arg_base_types": builtin.ArrayAttr(tensor_arg_base_types)
-                                                         },
-                                             operands=[execContext, execArgs, execOutputs, tensor_args],)
+    execOp = xdtl.DenseExecuteTensorOp([block],
+                                       [(vectorSpace_to_xdtl(vs),v) for vs,v in space_map.items()],
+                                       [(i,v) for i,v in arg_map.items()],
+                                       [o for o, l in outputs],
+                                       builtin.ArrayAttr(output_tensors_dim_names),
+                                       builtin.ArrayAttr(output_base_types),
+                                       tensor_args,
+                                       builtin.ArrayAttr(tensor_arg_indices),
+                                       builtin.ArrayAttr(tensor_arg_base_types),
+                                       )
+    # execOp = xdtl.DenseExecuteTensorOp.build(regions=[[block]],
+    #                                          attributes={"tensor_arg_indices": builtin.ArrayAttr(tensor_arg_indices),
+    #                                                      "tensor_arg_base_types": builtin.ArrayAttr(tensor_arg_base_types)
+    #                                                      },
+    #                                          operands=[execContext, execArgs, execOutputs, tensor_args],)
 
     execOp.verify()
-    return [execContext, execArgs, execOutputs], execOp
+    return [], execOp
 
 
 pass

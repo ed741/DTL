@@ -22,6 +22,7 @@ from xdsl.irdl import SingleBlockRegionDef
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
 from xdsl.printer import Printer
 from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter
+from xdsl.transforms.experimental.lower_dlt_to_ import DLTSelectRewriter
 from xdslDTL import compilec
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
 
@@ -64,12 +65,12 @@ block = ir.Block()
 
 
 a = block.insert_arg(dlt.PtrType(
-    dlt.TypeType([([], [("vQ", "Q"),("V10A", 10)], f32)]
-    )).with_layout_name("a"), 0)
+    dlt.TypeType([([], [("vQ", dlt.InitDefinedExtentAttr("Q")),("V10A", 10)], f32)]
+    ), extents=[dlt.InitDefinedExtentAttr("Q")]).with_layout_name("a"), 0)
 # b = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,6]), 1)
 b = block.insert_arg(dlt.PtrType(
-    dlt.TypeType([([], [("V10B", 10), ("vS", "S")], f32)]
-    )).with_layout_name("b"), 1)
+    dlt.TypeType([([], [("V10B", 10), ("vS", dlt.InitDefinedExtentAttr("S"))], f32)]
+    ), extents=[dlt.InitDefinedExtentAttr("S")]).with_layout_name("b"), 1)
 
 vQ_len_attr = IntegerAttr.from_int_and_width(5,64)
 vS_len_attr = IntegerAttr.from_int_and_width(6,64)
@@ -97,7 +98,7 @@ ret = Return()
 
 
 block.add_ops(exec)
-init_inner = dlt.AllocOp(operands=[[],[]], attributes={"dynamic_dimensions":builtin.ArrayAttr([])}, result_types=[a.type.as_base()])
+init_inner = dlt.AllocOp(operands=[[],[]], attributes={"init_extents":builtin.ArrayAttr([])}, result_types=[a.type.as_base()])
 block.add_op(init_inner)
 callinner = Call("foo", [init_inner, b, out],[])
 block.add_op(callinner)
@@ -113,11 +114,11 @@ retTypes = [r.type for r in ret.operands]
 # retTypes = []
 func = FuncOp.from_region("foo", argTypes, retTypes, region)
 
-inits = [dlt.AllocOp(operands=[[],[]], attributes={"dynamic_dimensions":builtin.ArrayAttr([])}, result_types=[t.as_base()]) for t in argTypes]
+inits = [dlt.AllocOp(operands=[[],[]], attributes={"init_extents":builtin.ArrayAttr([])}, result_types=[t.as_base()]) for t in argTypes]
 
 call = Call("foo", inits,[])
 call2 = Call("foo", inits,[])
-module = ModuleOp([dlt.LayoutScopeOp([func] + inits + [call, call2])])
+module = ModuleOp([dlt.LayoutScopeOp([],[func] + inits + [call, call2])])
 module.verify()
 # module = ModuleOp([func])
 #
@@ -128,8 +129,7 @@ module.verify()
 print(module)
 
 print("=== DTL -> DLT")
-dtl_to_dlt_applier = PatternRewriteWalker(GreedyRewritePatternApplier(
-    [DTLDenseRewriter()]),
+dtl_to_dlt_applier = PatternRewriteWalker(DTLDenseRewriter(),
     walk_regions_first=False)
 
 dtl_to_dlt_applier.rewrite_module(module)
@@ -137,14 +137,26 @@ dtl_to_dlt_applier.rewrite_module(module)
 print(module)
 module.verify()
 
-print("=== DLT->???")
+print("=== DLT --generate-layouts-> DLT")
+dlt_to_dlt_applier = PatternRewriteWalker(DLTLayoutRewriter(),
+    walk_regions_first=False)
+
+dlt_to_dlt_applier.rewrite_module(module)
+
+print(module)
+module.verify()
+
+
+print("=== DLT -> LLVM?")
 dlt_to_llvm_applier = PatternRewriteWalker(GreedyRewritePatternApplier(
-    [DLTLayoutRewriter()]),
+    [DLTSelectRewriter()]),
     walk_regions_first=False)
 
 dlt_to_llvm_applier.rewrite_module(module)
 
 print(module)
+module.verify()
+
 
 print("=== llvm -> compiler")
 

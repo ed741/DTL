@@ -24,7 +24,7 @@ from xdsl.printer import Printer
 from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter
 from xdsl.transforms.experimental.lower_dlt_to_ import DLTSelectRewriter, DLTGetRewriter, DLTSetRewriter, \
-    DLTAllocRewriter, DLTIterateRewriter, DLTScopeRewriter, DLTPtrTypeRewriter
+    DLTAllocRewriter, DLTIterateRewriter, DLTScopeRewriter, DLTPtrTypeRewriter, DLTIndexTypeRewriter
 from xdsl.transforms.reconcile_unrealized_casts import reconcile_unrealized_casts
 from xdslDTL import compilec
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
@@ -128,7 +128,9 @@ dlt.InitDefinedExtentAttr("Q")
 
 call = Call("foo", inits,[])
 call2 = Call("foo", inits,[])
-module = ModuleOp([dlt.LayoutScopeOp([],[func] + init_extents + inits + [call, call2])])
+
+extra_ops = init_extents + inits + [call, call2]
+module = ModuleOp([dlt.LayoutScopeOp([],[func])])
 module.verify()
 # module = ModuleOp([func])
 #
@@ -171,7 +173,8 @@ dlt_to_llvm_applier = PatternRewriteWalker(GreedyRewritePatternApplier(
 dlt_to_llvm_applier.rewrite_module(module)
 rem_scope = PatternRewriteWalker(GreedyRewritePatternApplier(
     [DLTScopeRewriter(),
-     DLTPtrTypeRewriter(recursive=True)
+     DLTPtrTypeRewriter(recursive=True),
+     # DLTIndexTypeRewriter(recursive=True),
      ])
 )
 rem_scope.rewrite_module(module)

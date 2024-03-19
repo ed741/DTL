@@ -1,30 +1,24 @@
-import io
-import os
-import subprocess
-import tempfile
-from io import StringIO
-
 # import xdsl.dialects.arith
+import ctypes
+
 from dtl import *
 from dtl.dag import RealVectorSpace, Index
 import dtlpp.backends.xdsl as xdtl
-import numpy as np
 
-from dtl.dtlutils import visualise
+from dtl.libBuilder import LibBuilder
 from dtlpp.backends import native
-from xdsl import printer, ir
-from xdsl.dialects import memref, arith, builtin
-from xdsl.dialects.builtin import Float64Type, f32, ModuleOp, StringAttr, IntegerAttr, IndexType
-from xdsl.dialects.func import FuncOp, Return, Call
+from xdsl.dialects import builtin, llvm
+from xdsl.dialects.builtin import ModuleOp
 from xdsl.dialects.experimental import dlt
-from xdsl.ir import SSAValue, Region
-from xdsl.irdl import SingleBlockRegionDef
+from xdsl.ir import MLContext
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
-from xdsl.printer import Printer
 from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter
 from xdsl.transforms.experimental.lower_dlt_to_ import DLTSelectRewriter, DLTGetRewriter, DLTSetRewriter, \
-    DLTAllocRewriter, DLTIterateRewriter, DLTScopeRewriter, DLTPtrTypeRewriter, DLTIndexTypeRewriter
+    DLTAllocRewriter, DLTIterateRewriter, DLTScopeRewriter, DLTPtrTypeRewriter, DLTCopyRewriter, \
+    DLTExtractExtentRewriter
+from xdsl.transforms.printf_to_llvm import PrintfToLLVM
+from xdsl.transforms.printf_to_putchar import PrintfToPutcharPass
 from xdsl.transforms.reconcile_unrealized_casts import reconcile_unrealized_casts
 from xdslDTL import compilec
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
@@ -39,6 +33,7 @@ vQ = UnknownSizeVectorSpace("Q")
 # vu = UnknownSizeVectorSpace("VU")
 A = TensorVariable(vQ*v10, "A")
 B = TensorVariable(v10*vS, "B")
+output_t_var = TensorVariable(vQ*vS, "out")
 expr = (A[i,j]*B[j,k]).sum(j).forall(i,k)
 # expr = A[i,None].tupled_with(A[j, k].sum(k)).deindex(((v10, i), (i, j)))
 # expr = A[i,None].tupled_with(A[j, None].deindex((j, v10))).deindex(((v10, i), (i, vQ, v10)))
@@ -60,77 +55,29 @@ type = xdtl.DTLType_to_xdtl(expr.type)
 print("type:")
 print(type)
 
-# module = ModuleOp([])
-# block = module.body.block
-block = ir.Block()
-# a = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,5]), 0)
-# v10_len_attr = IntegerAttr.from_int_and_width(5,64)
 
 
-a = block.insert_arg(dlt.PtrType(
-    dlt.TypeType([([], [("vQ", dlt.InitDefinedExtentAttr("Q")),("V10A", 10)], f32)]
-    ), extents=[dlt.InitDefinedExtentAttr("Q")]).with_layout_name("a"), 0)
-# b = block.insert_arg(xdsl.dialects.builtin.TensorType.from_type_and_list(f32, [5,6]), 1)
-b = block.insert_arg(dlt.PtrType(
-    dlt.TypeType([([], [("V10B", 10), ("vS", dlt.InitDefinedExtentAttr("S"))], f32)]
-    ), extents=[dlt.InitDefinedExtentAttr("S")]).with_layout_name("b"), 1)
+lib_builder = LibBuilder()
+lib_builder.make_init("init_A", A, [vQ])
+lib_builder.make_init("init_B", B, [vS])
+lib_builder.make_init("init_Out", output_t_var, [vQ, vS])
+lib_builder.make_dummy("test3", 3)
+lib_builder.make_dummy("test5", 5)
+#
+# lib_builder.make_funcion("mm", expr,
+#                          [output_t_var],
+#                          [A,B],
+#                          [],
+#                          []
+#                          )
 
-vQ_len_attr = IntegerAttr(5, IndexType())
-vS_len_attr = IntegerAttr(6, IndexType())
-vS_len = arith.Constant(vS_len_attr, IndexType())
-vQ_len = arith.Constant(vQ_len_attr, IndexType())
-# vS_len = block.insert_arg(xdsl.dialects.builtin.i32, 2)
-# vQ_len = block.insert_arg(xdsl.dialects.builtin.i32, 3)
-# i_val = block.insert_arg(xdsl.dialects.builtin.i32, 4)
-block.add_op(vS_len)
-block.add_op(vQ_len)
-
-out = block.insert_arg(dlt.PtrType(dlt.TypeType([dlt.ElementAttr(tuple([dlt.SetAttr([]), dlt.SetAttr([dlt.DimensionAttr(tuple([StringAttr("vQ"), vQ_len_attr])), dlt.DimensionAttr(tuple([StringAttr("vS"), vS_len_attr]))]), f32]))])).with_layout_name("out"), 2)
-# mem = block.insert_arg(memref.MemRefType.from_element_type_and_shape(f32, (5,6)), 4)
-
-# lines, output = xdtl.get_xdsl_dtl_version(expr, tensorVariables={A:a})
-# lines, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:vS_len, vQ:vQ_len}, arg_map={i:i_val}, tensor_variables={A:a,B:b}, output=mem)
-exec, output = xdtl.get_xdsl_dtl_exec_version(expr, space_map={vS:SSAValue.get(vS_len), vQ:SSAValue.get(vQ_len)}, arg_map={}, tensor_variables={A:(a,["vQ", "V10A"]),B:(b,["V10B", "vS"])}, outputs=[(out,["vQ", "vS"])])
-ret = Return()
-
-#TEST BLOCK
-# block = ir.Block()
-# const_int32_1 = xdsl.dialects.arith.Constant.from_int_and_width(1,32)
-# lines = [const_int32_1]
-# ret = Return(const_int32_1)
+malloc_func = llvm.FuncOp("malloc", llvm.LLVMFunctionType([builtin.i64], llvm.LLVMPointerType.opaque()),
+                          linkage=llvm.LinkageAttr("external"))
+abort_func = llvm.FuncOp("abort", llvm.LLVMFunctionType([]),
+                          linkage=llvm.LinkageAttr("external"))
 
 
-block.add_ops(exec)
-init_inner = dlt.AllocOp(operands=[[],[vS_len.result, vQ_len.result]], attributes={"init_extents":builtin.ArrayAttr([
-dlt.InitDefinedExtentAttr("S"),
-dlt.InitDefinedExtentAttr("Q")
-])}, result_types=[a.type.as_base()])
-block.add_op(init_inner)
-callinner = Call("foo", [init_inner, b, out],[])
-block.add_op(callinner)
-
-block.add_ops([output, ret])
-
-
-
-
-region = Region([block])
-argTypes = [arg.type for arg in block.args]
-retTypes = [r.type for r in ret.operands]
-# retTypes = []
-func = FuncOp.from_region("foo", argTypes, retTypes, region)
-
-init_extents = [init_vS_len := arith.Constant(vS_len_attr, IndexType()), init_vQ_len := arith.Constant(vQ_len_attr, IndexType())]
-inits = [dlt.AllocOp(operands=[[],[init_vS_len.result, init_vQ_len.result]], attributes={"init_extents":builtin.ArrayAttr([
-dlt.InitDefinedExtentAttr("S"),
-dlt.InitDefinedExtentAttr("Q")
-])}, result_types=[t.as_base()]) for t in argTypes]
-
-call = Call("foo", inits,[])
-call2 = Call("foo", inits,[])
-
-extra_ops = init_extents + inits + [call, call2]
-module = ModuleOp([dlt.LayoutScopeOp([],[func])])
+module = ModuleOp([malloc_func, abort_func, dlt.LayoutScopeOp([],lib_builder.funcs)])
 module.verify()
 # module = ModuleOp([func])
 #
@@ -167,6 +114,8 @@ dlt_to_llvm_applier = PatternRewriteWalker(GreedyRewritePatternApplier(
      DLTSetRewriter(),
      DLTAllocRewriter(),
      DLTIterateRewriter(),
+     DLTCopyRewriter(),
+     DLTExtractExtentRewriter(),
      ]),
     walk_regions_first=False)
 
@@ -178,6 +127,8 @@ rem_scope = PatternRewriteWalker(GreedyRewritePatternApplier(
      ])
 )
 rem_scope.rewrite_module(module)
+PrintfToPutcharPass().apply(MLContext(True), module)
+PrintfToLLVM().apply(MLContext(True), module)
 
 reconcile_unrealized_casts(module)
 
@@ -188,56 +139,49 @@ module.verify()
 print("=== llvm -> compiler")
 
 
-compilec.compile(module, "./tmp/libxdtl10.o")
-# print("args")
-# print(func.args)
-# print("results")
-# print(func.get_return_op())
-# print("func type")
-# print(func.function_type)
-#
-# print("mlir output:")
-# res = StringIO()
-# printer = Printer(print_generic_format=False, stream=res)
-# printer.print(module)
-# print(res.getvalue())
-#
-#
-# print("mlir-opt:")
-# passes = ["--convert-scf-to-cf",
-#           "--convert-cf-to-llvm",
-#           "--convert-func-to-llvm",
-#           "--convert-arith-to-llvm",
-#           "--expand-strided-metadata",
-#           "--normalize-memrefs",
-#           "--memref-expand",
-#           "--fold-memref-alias-ops",
-#           "--finalize-memref-to-llvm",
-#           "--reconcile-unrealized-casts"]
-#
-# process_opt = subprocess.Popen(['mlir-opt'] + passes, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-# out, err = process_opt.communicate(res.getvalue().encode('utf8'))
-# process_opt.wait()
-# print(out)
-#
-# print("mlir-translate")
-# process_translate = subprocess.Popen(['mlir-translate', '--mlir-to-llvmir'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-# out, err = process_translate.communicate(out)
-# process_translate.wait()
-# print(out)
-#
-# fd, path = tempfile.mkstemp()
-# try:
-#     with os.fdopen(fd, 'wb') as tmp:
-#         tmp.write(out)
-#
-#         print("clang")
-#         process_clang = subprocess.Popen(['clang', '-c', '-o', './bin/dtlLib.ll', path], stdin=subprocess.PIPE,
-#                                              stdout=subprocess.PIPE)
-#         process_clang.wait()
-# finally:
-#     os.remove(path)
-#
-# print("done")
+compilec.compile(module, "./tmp/libxdtl11.so")
 
+
+print("load?")
+from ctypes import cdll
+lib = cdll.LoadLibrary("./tmp/libxdtl11.so")
+print("lib loaded")
+print("Try tests")
+t3 = lib.test3()
+print(t3)
+t5 = lib.test5()
+print(t5)
+print("tests complete")
+c_q = ctypes.c_uint64(3)
+c_s = ctypes.c_uint64(5)
+
+class A_Ptr(ctypes.Structure):
+    _fields_= [('ptr', ctypes.c_void_p), ('q', ctypes.c_uint64)]
+class B_Ptr(ctypes.Structure):
+    _fields_= [('ptr', ctypes.c_void_p), ('s', ctypes.c_uint64)]
+class Out_Ptr(ctypes.Structure):
+    _fields_= [('ptr', ctypes.c_void_p), ('q', ctypes.c_uint64), ('s', ctypes.c_uint64)]
+
+print(Out_Ptr)
+print(Out_Ptr.ptr)
+print(Out_Ptr.q)
+print(Out_Ptr.s)
+lib.init_A.restype = A_Ptr
+lib.init_B.restype = B_Ptr
+# lib.init_Out.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+lib.init_Out.restype = Out_Ptr
+# lib.mm.argtypes = [Out_Ptr, A_Ptr, B_Ptr]
+a_val = lib.init_A(c_q)
+print("inited A")
+print(a_val.ptr, a_val.q)
+b_val = lib.init_B(c_s)
+print("inited B")
+print(b_val.ptr, b_val.s)
+out_val = lib.init_Out(c_s, c_q)
+print(out_val)
+print(out_val.ptr, out_val.q, out_val.s)
+print("vals inited")
+# lib.mm(out_val, a_val, b_val)
+
+print("Done")
 

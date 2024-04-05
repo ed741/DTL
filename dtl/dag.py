@@ -647,10 +647,10 @@ class IndexBinding(Expr):  # [...] -> <...>... , {b:B} => [...b:B] -> <...>...
         return f"{self.expr.terminalShortStr()}{{{','.join([str(i) + ':' + str(s) for i, s, in zip(self.indices, self.spaces)])}}}"
 
     @staticmethod
-    def alignBindings(exprs: Sequence[Expr], names: Sequence[str] = None,
-                               message: str = "To align index bindings common indices must act over the same space") -> \
-    List[Expr]:
-        exprs = list(exprs)
+    def alignBindings(exprs: Sequence[Expr],
+                      names: Sequence[str] = None,
+                      message: str = 'To align index bindings common indices must act over the same space') -> List[Expr]:
+        exprs = [Expr.exprInputConversion(e) for e in exprs]
         expr_types = [e.type for e in exprs]
         DTLType.checkCommonIndices(expr_types, names, message)
         args = {}

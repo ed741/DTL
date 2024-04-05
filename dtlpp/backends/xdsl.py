@@ -122,13 +122,9 @@ def _(node: dtl.Literal, nodeMap=None, tensorVariables=None):
     nodeMap = {} if nodeMap is None else nodeMap
     tensorVariables = {} if tensorVariables is None else tensorVariables
     if node in nodeMap: return [], nodeMap[node]
-
-    f = arith.Constant.from_float_and_width(node.f, builtin.f32)
-    type = DTLType_to_xdtl(node.type)
-    out = xdtl.ScalarConstOp.build(operands=[f], result_types=[type])
-
+    out = xdtl.ScalarConstOp(builtin.FloatAttr(node.f, builtin.f32))
     nodeMap[node] = out
-    return [f, out], out
+    return [out], out
 
 
 @get_xdsl_dtl_version.register

@@ -18,6 +18,7 @@ from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import PassByPointerRewriter
 from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter
+from xdsl.transforms.experimental.generate_dlt_ptr_identities import DLTGeneratePtrIdentitiesRewriter
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
 from xdsl.transforms.printf_to_llvm import PrintfToLLVM
 from xdsl.transforms.printf_to_putchar import PrintfToPutcharPass
@@ -316,6 +317,12 @@ class LibBuilder:
         dtl_to_dlt_applier.rewrite_module(module)
         module.verify()
 
+        identity_gen = DLTGeneratePtrIdentitiesRewriter()
+        dlt_to_dlt_applier = PatternRewriteWalker(identity_gen,
+                                                  walk_regions_first=False)
+        dlt_to_dlt_applier.rewrite_module(module)
+        module.verify()
+
         print(module)
 
         # generate-layouts-> DLT
@@ -323,6 +330,24 @@ class LibBuilder:
                                                   walk_regions_first=False)
         dlt_to_dlt_applier.rewrite_module(module)
         module.verify()
+
+        identifiers = {}
+        for op in module.walk():
+            for ptr in ([typing.cast(dlt.PtrType, r.type) for r in op.results if isinstance(r.type, dlt.PtrType)] +
+                        [typing.cast(dlt.PtrType, arg.type) for region in op.regions for block in region.blocks for arg in block.args if isinstance(arg.type, dlt.PtrType)]):
+                if ptr.has_identity:
+                    if ptr.identification in identifiers:
+
+                        if identifiers[ptr.identification] != ptr:
+                            print(op)
+                            print(ptr)
+                            print(identifiers[ptr.identification])
+                    else:
+                        identifiers[ptr.identification] = ptr
+                else:
+                    print(op)
+
+
 
         print(module)
 

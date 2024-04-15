@@ -7,6 +7,10 @@ import dtlpp.backends.xdsl as xdtl
 
 from dtl.libBuilder import LibBuilder
 from dtlpp.backends import native
+from xdsl.dialects import arith, scf, func
+from xdsl.dialects.builtin import f32, IntegerAttr, IntegerType
+from xdsl.dialects.experimental import dlt
+from xdsl.ir import Block, Region
 
 i = Index('i')
 j = Index('j')
@@ -44,6 +48,14 @@ lib_builder.make_function("mm", matMul,
                          [],
                          []
                          )
+block = Block()
+block.add_op(alloc_1 := dlt.AllocOp(dlt.TypeType([dlt.ElementAttr([],[], f32)]), {}))
+block.add_op(alloc_2 := dlt.AllocOp(dlt.TypeType([dlt.ElementAttr([],[], f32)]), {}))
+block.add_op(const := arith.Constant(IntegerAttr(0, IntegerType(1))))
+block.add_op(if_op := scf.If(const, [alloc_1.res.type], [scf.Yield(alloc_1.res)],[scf.Yield(alloc_2.res)]))
+block.add_op(func.Return(if_op.output[0]))
+func_op = func.FuncOp("test2", ([],[alloc_1.res.type]), Region(block))
+lib_builder.funcs.append(func_op)
 lib = lib_builder.build()
 
 print(lib.test())

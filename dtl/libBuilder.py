@@ -18,7 +18,8 @@ from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import PassByPointerRewriter
 from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter
-from xdsl.transforms.experimental.generate_dlt_ptr_identities import DLTGeneratePtrIdentitiesRewriter
+from xdsl.transforms.experimental.generate_dlt_ptr_identities import DLTGeneratePtrIdentitiesRewriter, \
+    DLTSimplifyPtrIdentitiesRewriter
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
 from xdsl.transforms.printf_to_llvm import PrintfToLLVM
 from xdsl.transforms.printf_to_putchar import PrintfToPutcharPass
@@ -159,8 +160,7 @@ class LibBuilder:
         base_ptr_type = ptr_type.as_base().with_identification("R_"+base_ptr_type.identification.data)
         block = ir.Block()
         arg_idx = 0
-        dlt_extents = []
-        alloc_args = []
+        extents_map = {}
         for e in extents:
             arg = block.insert_arg(IndexType(), arg_idx)
             debug = [c := builtin.UnrealizedConversionCastOp.get([arg], [i64]), trunc_op := arith.TruncIOp(c.outputs[0], builtin.i32), printf.PrintIntOp(trunc_op.result)] + printf.PrintCharOp.from_constant_char_ops("\n")
@@ -168,12 +168,9 @@ class LibBuilder:
             arg_idx += 1
             if e is not None:
                 assert isinstance(e, UnknownSizeVectorSpace)
-                alloc_args.append(arg)
-                dlt_extents.append(self._get_vs_extent(e))
+                extents_map[self._get_vs_extent(e)] = arg
 
-        alloc_op = dlt.AllocOp(operands=[[], alloc_args],
-                               attributes={"init_extents": builtin.ArrayAttr(dlt_extents)},
-                               result_types=[base_ptr_type])
+        alloc_op = dlt.AllocOp(base_ptr_type, extents_map)
         block.add_op(alloc_op)
         select_elem_ops, select_elem_ssa = self._get_select_ops(alloc_op.res, elements, tensor_vars)
         block.add_ops(select_elem_ops)
@@ -306,7 +303,8 @@ class LibBuilder:
         abort_func = llvm.FuncOp("abort", llvm.LLVMFunctionType([]),
                                  linkage=llvm.LinkageAttr("external"))
 
-        module = ModuleOp([malloc_func, abort_func, dlt.LayoutScopeOp([], self.funcs)])
+        scope_op = dlt.LayoutScopeOp([], self.funcs)
+        module = ModuleOp([malloc_func, abort_func, scope_op])
         module.verify()
 
         print(module)
@@ -317,10 +315,28 @@ class LibBuilder:
         dtl_to_dlt_applier.rewrite_module(module)
         module.verify()
 
-        identity_gen = DLTGeneratePtrIdentitiesRewriter()
-        dlt_to_dlt_applier = PatternRewriteWalker(identity_gen,
+        first_identity_gen = DLTGeneratePtrIdentitiesRewriter()
+        dlt_ident_applier = PatternRewriteWalker(first_identity_gen,
                                                   walk_regions_first=False)
-        dlt_to_dlt_applier.rewrite_module(module)
+        dlt_ident_applier.rewrite_module(module)
+        simplify_graph = DLTSimplifyPtrIdentitiesRewriter(first_identity_gen.layouts, first_identity_gen.initial_identities)
+        dlt_simplify_applier = PatternRewriteWalker(simplify_graph,
+                                                  walk_regions_first=False)
+        dlt_simplify_applier.rewrite_module(module)
+
+        layout_graph_generator = DLTGeneratePtrIdentitiesRewriter()
+        dlt_graph_gen_applier = PatternRewriteWalker(layout_graph_generator,
+                                                 walk_regions_first=False)
+        dlt_graph_gen_applier.rewrite_module(module)
+
+        module.verify()
+
+        print(module)
+
+        layout_graph = layout_graph_generator.layouts[scope_op]
+        check = layout_graph.is_consistent()
+
+
         module.verify()
 
         print(module)

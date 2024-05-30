@@ -540,16 +540,19 @@ class Expr(Node, abc.ABC):
     def sum(self, *indices: Index) -> "IndexSum":
         return IndexSum(self, indices)
     
-    def __add__(self, other: "Expr") -> "Expr":
+    def __add__(self, other: "ExprTypeHint") -> "Expr":
+        other = Expr.exprInputConversion(other)
         exprs = IndexBinding.alignBindings([self,other], names = ["lhs", "rhs"], message="In Addition's lhs and rhs expressions, common indices must act over the same spaces")
         return AddBinOp(*exprs)
     
-    def __sub__(self, other: "Expr") -> "Expr":
+    def __sub__(self, other: "ExprTypeHint") -> "Expr":
+        other = Expr.exprInputConversion(other)
         exprs = IndexBinding.alignBindings([self, other], names=["lhs", "rhs"],
                                             message="In Subtraction's lhs and rhs expressions, common indices must act over the same spaces")
         return SubBinOp(*exprs)
     
-    def __mul__(self, other: "Expr") -> "Expr":
+    def __mul__(self, other: "ExprTypeHint") -> "Expr":
+        other = Expr.exprInputConversion(other)
         exprs = IndexBinding.alignBindings([self, other], names=["lhs", "rhs"],
                                             message="In Multiplication's lhs and rhs expressions, common indices must act over the same spaces")
         return MulBinOp(*exprs)
@@ -577,6 +580,11 @@ class Expr(Node, abc.ABC):
 
 
 ExprTypeHint = typing.Union[Expr, typing.Tuple["ExprTypeHint",...], int, float]
+
+
+def expr(*e: ExprTypeHint) -> Expr:
+    return Expr.exprInputConversion(e)
+
 
 class TensorVariable(Expr):  # -> <...>
     fields = Expr.fields | {"tensor_space", "name"}

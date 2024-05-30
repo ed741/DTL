@@ -17,7 +17,7 @@ from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternAppl
 from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import PassByPointerRewriter
-from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter
+from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter, _make_dense_layouts
 from xdsl.transforms.experimental.generate_dlt_ptr_identities import DLTGeneratePtrIdentitiesRewriter, \
     DLTSimplifyPtrIdentitiesRewriter
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
@@ -28,6 +28,12 @@ from xdslDTL import compilec
 
 _T = typing.TypeVar("_T")
 TupleStruct: typing.TypeAlias = typing.Union[tuple["TupleStruct[_T]", ...], _T]
+
+def _flatten(ts: TupleStruct[_T]) -> list[_T]:
+    if isinstance(ts, tuple):
+        return [e for es in ts for e in _flatten(es)]
+    else:
+        return [ts]
 
 @dataclass
 class FuncTypeDescriptor:
@@ -40,7 +46,8 @@ class LibBuilder:
     def __init__(self):
         self.vs_namer = {}
         self.vs_name_idx = 0
-        self.tensor_var_details: dict[TupleStruct[TensorVariable], tuple[dlt.PtrType, TupleStruct[dlt.ElementAttr]]] = {}
+        self.tensor_var_details: dict[TupleStruct[TensorVariable], dlt.PtrType] = {}
+        self.tensor_var_elems: dict[TupleStruct[TensorVariable], TupleStruct[dlt.ElementAttr]] = {}
         # self.tensor_var_ptrs: dict[TupleStruct[TensorVariable], dlt.PtrType] = {}
         self.tensor_var_dims: dict[TensorVariable, list[dlt.DimensionAttr]] = {}
         self.tensor_var_namer_idx = 0
@@ -54,6 +61,7 @@ class LibBuilder:
             self.vs_name_idx += 1
             return name
         if vs not in self.vs_namer:
+            raise ValueError()
             name = "dim_" + str(self.vs_name_idx)
             self.vs_name_idx += 1
             self.vs_namer[vs] = name
@@ -65,74 +73,109 @@ class LibBuilder:
         if isinstance(vs, VectorSpace):
             return dlt.StaticExtentAttr(vs.dim)
 
-    def _increment_tupleStruct_layer_elements(self, elements: TupleStruct[dlt.ElementAttr], add: dlt.MemberAttr = None) -> TupleStruct[dlt.ElementAttr]:
+    def _add_member_in_tupleStruct_layer_elements(self, elements: TupleStruct[dlt.ElementAttr], add: dlt.MemberAttr = None) -> TupleStruct[dlt.ElementAttr]:
         if isinstance(elements, tuple):
-            return tuple([self._increment_tupleStruct_layer_elements(e) for e in elements])
+            return tuple([self._add_member_in_tupleStruct_layer_elements(e) for e in elements])
         elif isinstance(elements, dlt.ElementAttr):
             element = typing.cast(dlt.ElementAttr, elements)
             members = list(element.member_specifiers)
-            members = self._increment_tupleStruct_layer_members(members)
             if add is not None:
                 members.append(add)
             return dlt.ElementAttr(members, element.dimensions, element.base_type)
 
-    def _increment_tupleStruct_layer_members(self, members: list[dlt.MemberAttr]) -> list[dlt.MemberAttr]:
-        new_members = []
-        for member in members:
-            assert isinstance(member, dlt.MemberAttr)
-            member = typing.cast(dlt.MemberAttr, member)
-            if member.structName.data.startswith("T_") and member.structName.data[2:].isdecimal():
-                layer = int(member.structName.data[2:])
-                new_member = dlt.MemberAttr(f"T_{layer}", member.memberName)
-                new_members.append(new_member)
-            else:
-                raise ValueError()
-                # new_members.append(member)
-        return new_members
+    # def _increment_tupleStruct_layer_members(self, members: list[dlt.MemberAttr]) -> list[dlt.MemberAttr]:
+    #     new_members = []
+    #     for member in members:
+    #         assert isinstance(member, dlt.MemberAttr)
+    #         member = typing.cast(dlt.MemberAttr, member)
+    #         if member.structName.data.startswith("T_") and member.structName.data[2:].isdecimal():
+    #             layer = int(member.structName.data[2:])
+    #             new_member = dlt.MemberAttr(f"T_{layer}", member.memberName)
+    #             new_members.append(new_member)
+    #         else:
+    #             raise ValueError()
+    #             # new_members.append(member)
+    #     return new_members
 
+    def _set_dlt_type_elems_for_tensor_var(self, tensor_vars: TupleStruct[TensorVariable], level=0) -> TupleStruct[dlt.ElementAttr]:
+        assert tensor_vars not in self.tensor_var_elems
+        if isinstance(tensor_vars, tuple):
+            elements: TupleStruct[dlt.ElementAttr] = tuple()
+            for i, tensor_var in enumerate(tensor_vars):
+                child_elements = self._set_dlt_type_elems_for_tensor_var(tensor_var, level=level + 1)
+                new_member = dlt.MemberAttr(f"T_{level}", f"{i}")
+                child_elements = self._add_member_in_tupleStruct_layer_elements(child_elements, add=new_member)
+                elements = tuple([*elements, child_elements])
+            self.tensor_var_elems[tensor_vars] = elements
+            return elements
+        else:
+            tensor_var = typing.cast(TensorVariable, tensor_vars)
+            vector_space_vars = tensor_var.tensor_space.spaces
+            vector_space_names = [self._get_vs_name(vs, new=True) for vs in vector_space_vars]
+            vector_space_extents = [self._get_vs_extent(vs) for vs in vector_space_vars]
+            dimensions = [dlt.DimensionAttr(vs_name, vs_extent) for vs_name, vs_extent in
+                          zip(vector_space_names, vector_space_extents)]
+            element = dlt.ElementAttr([], dimensions, builtin.f32)
+            self.tensor_var_elems[tensor_var] = element
+            self.tensor_var_dims[tensor_var] = dimensions
+            return element
 
-    def _set_dlt_type_for_tensor_var(self, tensor_vars: TupleStruct[TensorVariable]) -> TupleStruct[dlt.ElementAttr]:
-        if tensor_vars not in self.tensor_var_details:
-            if isinstance(tensor_vars, tuple):
-                elements: TupleStruct[dlt.ElementAttr] = tuple()
-                for i, tensor_var in enumerate(tensor_vars):
-                    child_elements = self._set_dlt_type_for_tensor_var(tensor_var)
-                    new_member = dlt.MemberAttr(f"T_0", f"{i}")
-                    child_elements = self._increment_tupleStruct_layer_elements(child_elements, add=new_member)
-                    elements = tuple([*elements, child_elements])
+    def _set_dlt_type_for_tensor_var(self, tensor_vars: TupleStruct[TensorVariable], ptr_type: dlt.PtrType = None, members: set[dlt.MemberAttr] = None, level=0):
+        assert tensor_vars not in self.tensor_var_details
+        if members is None:
+            members = set()
+        if isinstance(tensor_vars, tuple):
+            elements = _flatten(self.tensor_var_elems[tensor_vars])
+            if ptr_type is None:
+
                 dlt_TypeType = dlt.TypeType(elements)
                 all_dims = [dim for elem in elements for dim in elem.dimensions]
                 init_extents = list({base_extent for dim in all_dims for base_extent in dim.extent.base_extents() if
                                      isinstance(base_extent, dlt.InitDefinedExtentAttr)})
                 ptr_id = str(self.tensor_var_namer_idx)
                 self.tensor_var_namer_idx += 1
-                ptr_type = dlt.PtrType(dlt_TypeType, extents=init_extents, identity=ptr_id)
-                self.tensor_var_details[tensor_vars] = ptr_type, elements
-                return elements
+                ptr_type = dlt.PtrType(dlt_TypeType, members=dlt.SetAttr(members), extents=init_extents, identity=ptr_id)
             else:
-                tensor_var = typing.cast(TensorVariable, tensor_vars)
-                vector_space_vars = tensor_var.tensor_space.spaces
-                vector_space_names = [self._get_vs_name(vs, new=True) for vs in vector_space_vars]
-                vector_space_extents = [self._get_vs_extent(vs) for vs in vector_space_vars]
-                dimensions = [dlt.DimensionAttr(vs_name, vs_extent) for vs_name, vs_extent in
-                              zip(vector_space_names, vector_space_extents)]
-                element = dlt.ElementAttr([], dimensions, builtin.f32)
+                ptr_id = str(self.tensor_var_namer_idx)
+                self.tensor_var_namer_idx += 1
+                ptr_type = dlt.PtrType(ptr_type.contents_type.select_members(members), ptr_type.layout,
+                                       ptr_type.filled_members.add(members),
+                                       ptr_type.filled_dimensions,
+                                       ptr_type.filled_extents,
+                                       ptr_type.is_base,
+                                       ptr_id)
+            self.tensor_var_details[tensor_vars] = ptr_type
+            for i, child in enumerate(tensor_vars):
+                self._set_dlt_type_for_tensor_var(child, ptr_type,
+                                                  members.union({dlt.MemberAttr(f"T_{level}", f"{i}")}),
+                                                  level=level + 1)
+        else:
+            tensor_var = typing.cast(TensorVariable, tensor_vars)
+            element = self.tensor_var_elems[tensor_var]
+            if ptr_type is None:
                 dlt_TypeType = dlt.TypeType([element])
-                init_extents = list({base_extent for dim in dimensions for base_extent in dim.extent.base_extents() if
+                all_dims = [dim for dim in element.dimensions]
+                init_extents = list({base_extent for dim in all_dims for base_extent in dim.extent.base_extents() if
                                      isinstance(base_extent, dlt.InitDefinedExtentAttr)})
                 ptr_id = str(self.tensor_var_namer_idx)
                 self.tensor_var_namer_idx += 1
-                ptr_type = dlt.PtrType(dlt_TypeType, extents=init_extents, identity=ptr_id)
-                self.tensor_var_details[tensor_var] = ptr_type, element
-                self.tensor_var_dims[tensor_var] = dimensions
-                return element
-        else:
-            return self.tensor_var_details[tensor_vars][1]
+                ptr_type = dlt.PtrType(dlt_TypeType, members=dlt.SetAttr(members), extents=init_extents, identity=ptr_id)
+            else:
+                ptr_id = str(self.tensor_var_namer_idx)
+                self.tensor_var_namer_idx += 1
+                ptr_type = dlt.PtrType(ptr_type.contents_type.select_members(members), ptr_type.layout,
+                                       ptr_type.filled_members.add(members),
+                                       ptr_type.filled_dimensions,
+                                       ptr_type.filled_extents,
+                                       ptr_type.is_base,
+                                       ptr_id)
+            self.tensor_var_details[tensor_var] = ptr_type
 
     def _get_tensor_var_info(self, tensor_vars: TupleStruct[TensorVariable]) -> tuple[dlt.PtrType, TupleStruct[dlt.ElementAttr]]:
         if tensor_vars not in self.tensor_var_details:
+            self._set_dlt_type_elems_for_tensor_var(tensor_vars)
             self._set_dlt_type_for_tensor_var(tensor_vars)
-        return self.tensor_var_details[tensor_vars]
+        return self.tensor_var_details[tensor_vars], self.tensor_var_elems[tensor_vars]
 
     def _get_select_ops(self, ssa_in: ir.SSAValue, elements: TupleStruct[dlt.ElementAttr], tensor_vars: TupleStruct[TensorVariable]) -> tuple[list[ir.Operation], list[ir.SSAValue]]:
         if isinstance(elements, tuple):
@@ -147,7 +190,7 @@ class LibBuilder:
             element = typing.cast(dlt.ElementAttr, elements)
             assert isinstance(tensor_vars, TensorVariable)
             tensor_var = typing.cast(TensorVariable, tensor_vars)
-            result_type, _ = self.tensor_var_details[tensor_var]
+            result_type = self.tensor_var_details[tensor_var]
             return [op := dlt.SelectOp(ssa_in, element.member_specifiers, [], [], result_type=result_type)], [op.res]
 
     def make_init(self,
@@ -201,6 +244,39 @@ class LibBuilder:
         self.func_map[name] = FuncTypeDescriptor(list(func_type.inputs), list(func_type.outputs), ret_val)
         return func
 
+    def make_setter(self, name, tensor_var: TensorVariable, members: typing.Iterable[dlt.MemberAttr], args: list[int]):
+        block = ir.Block()
+        ptr_type, element = self._get_tensor_var_info(tensor_var)
+        dims = self.tensor_var_dims[tensor_var]
+
+        dlt_tensor = block.insert_arg(ptr_type, 0)
+
+        assert len(args) == len(tensor_var.tensor_space.spaces)
+        index_args = []
+        for i in range(max(args) + 1):
+            index_args.append(block.insert_arg(IndexType(), len(block.args)))
+
+        dim_values = []
+        for arg_idx in args:
+            dim_values.append(index_args[arg_idx])
+
+        select = dlt.SelectOp(dlt_tensor, members, dims, dim_values)
+        block.add_op(select)
+        value_arg = block.insert_arg(element.base_type, len(block.args))
+        store = dlt.SetOp(select.res, element.base_type, value_arg)
+        block.add_op(store)
+        ret = Return()
+        block.add_op(ret)
+
+        region = Region([block])
+        argTypes = [arg.type for arg in block.args]
+        retTypes = [r.type for r in ret.operands]
+        func = FuncOp.from_region(name, argTypes, retTypes, region)
+        self.funcs.append(func)
+        func_type = func.function_type
+        self.func_map[name] = FuncTypeDescriptor(list(func_type.inputs), list(func_type.outputs), None)
+        return func
+
     def make_print_tensorVar(self, name: str, tensor_var, extents: list[UnknownSizeVectorSpace]):
         block = ir.Block()
         ptr_type, elements = self._get_tensor_var_info(tensor_var)
@@ -236,7 +312,6 @@ class LibBuilder:
         func_type = func.function_type
         self.func_map[name] = FuncTypeDescriptor(list(func_type.inputs), list(func_type.outputs), None)
         return func
-
 
     def make_function(self,
                       name: str,
@@ -334,34 +409,69 @@ class LibBuilder:
         print(module)
 
         layout_graph = layout_graph_generator.layouts[scope_op]
+        layout_graph.consistent_check()
         check = layout_graph.is_consistent()
+        if not check:
+            raise ValueError("Layout Graph has been check and found to be inconsistent")
+        original_type_map = layout_graph.get_type_map()
+        new_type_map = original_type_map.copy()
 
+
+        while any(ptr.layout.is_abstract for ptr in new_type_map.values()):
+            old_type_map = new_type_map.copy()
+            idents = {ident for ident in layout_graph.get_entry_layouts().keys() if new_type_map[ident].layout.is_abstract}
+            if len(idents) == 0:
+                idents = {ident for ident in new_type_map.keys() if
+                          new_type_map[ident].layout.is_abstract}
+            if len(idents) == 0:
+                raise ValueError("some layout is abstract but cannot find an abstract layout")
+            ident = idents.pop()
+            print(f"Reifying {ident.data}")
+            ptr = new_type_map.pop(ident)
+            new_layout = _make_dense_layouts(ptr.layout, {})
+            new_ptr = ptr.with_new_layout(new_layout, preserve_ident=True)
+            new_type_map[ident] = new_ptr
+            layout_graph.propagate_type(ident, new_type_map)
+            changed = {i for (i, ptr) in new_type_map.items() if old_type_map[i] != ptr}
+            print("Propagated changes to: " + ",".join([i.data for i in changed]))
+
+        # idents, ptr_types = zip(*type_map.items())
+        # layouts = [p.layout for p in ptr_types]
+        # name_map = {}
+        # new_layouts = _make_dense_layouts(layouts, name_map)
+        # new_ptr_types = [p.with_new_layout(l, preserve_ident=True, remove_bloat=True) for p, l in zip(ptr_types, new_layouts)]
+        # new_type_map = {i:p for i, p in zip(idents, new_ptr_types)}
+        check = layout_graph.is_consistent(new_type_map)
+        if not check:
+            raise ValueError("Layout Graph has been check and found to be inconsistent")
+
+        layout_graph.use_types(new_type_map).rewrite_op(scope_op)
 
         module.verify()
 
         print(module)
 
-        # generate-layouts-> DLT
-        dlt_to_dlt_applier = PatternRewriteWalker(DLTLayoutRewriter(),
-                                                  walk_regions_first=False)
-        dlt_to_dlt_applier.rewrite_module(module)
-        module.verify()
-
-        identifiers = {}
-        for op in module.walk():
-            for ptr in ([typing.cast(dlt.PtrType, r.type) for r in op.results if isinstance(r.type, dlt.PtrType)] +
-                        [typing.cast(dlt.PtrType, arg.type) for region in op.regions for block in region.blocks for arg in block.args if isinstance(arg.type, dlt.PtrType)]):
-                if ptr.has_identity:
-                    if ptr.identification in identifiers:
-
-                        if identifiers[ptr.identification] != ptr:
-                            print(op)
-                            print(ptr)
-                            print(identifiers[ptr.identification])
-                    else:
-                        identifiers[ptr.identification] = ptr
-                else:
-                    print(op)
+        # # generate-layouts-> DLT
+        # dlt_to_dlt_applier = PatternRewriteWalker(DLTLayoutRewriter(),
+        #                                           walk_regions_first=False)
+        # dlt_to_dlt_applier.rewrite_module(module)
+        # module.verify()
+        #
+        # identifiers = {}
+        # for op in module.walk():
+        #     for ptr in ([typing.cast(dlt.PtrType, r.type) for r in op.results if isinstance(r.type, dlt.PtrType)] +
+        #                 [typing.cast(dlt.PtrType, arg.type) for region in op.regions for block in region.blocks for arg in block.args if isinstance(arg.type, dlt.PtrType)]):
+        #         if ptr.has_identity:
+        #             if ptr.identification in identifiers:
+        #
+        #                 if identifiers[ptr.identification] != ptr:
+        #                     print(op)
+        #                     print(ptr)
+        #                     print(identifiers[ptr.identification])
+        #             else:
+        #                 identifiers[ptr.identification] = ptr
+        #         else:
+        #             print(op)
 
 
 

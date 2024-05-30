@@ -104,7 +104,7 @@ class ExprScalarLiteral(ExpressionNode):
         self.val = val
     
     def code(self):
-        return f"(np.full((),{self.val})"
+        return f"(np.full((),{self.val}))"
     
     def do(self, args: typing.Dict[str, typing.Any]):
         return np.float32(self.val)

@@ -146,9 +146,34 @@ def func4():
     kernel = builder.build()
 
 
+def func5():
+    i, j, k = Index('i'), Index('j'), Index('k')
+    R10 = RealVectorSpace(10)
+    Q, S = UnknownSizeVectorSpace('Q'), UnknownSizeVectorSpace('S')
+    A, B = TensorVariable(Q * R10, 'A'), TensorVariable(R10 * S, 'B')
+
+    t = ExprTuple((1,2))[i: R10].deindex(((i,i),()))
+    print(f"t: {t} : {t.type}")
+    one, two = t.tuple()
+    print(f"one: {one} : {one.type}")
+    print(f"two: {two} : {two.type}")
+    three = (one[i,j]+two).forall(i,j)
+    print(f"three: {three} : {three.type}")
+
+    output = three
+
+    visualise.plot_dag(output, view=True, short_strs=True, skip_terminals=True, label_edges=True)
+
+    builder = native.KernelBuilder(output, debug_comments=False)
+    print("native_test.3")
+    kernel = builder.build()
+    print(builder.codeNode.code())
+
+
 # mttkrp()
 # func1()
 # tucker()
 # func2()
 # func3()
-func4()
+# func4()
+func5()

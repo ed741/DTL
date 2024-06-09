@@ -15,7 +15,7 @@ from xdsl.dialects.func import Return, FuncOp
 from xdsl.ir import Region, MLContext, TypeAttribute
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
 from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
-from xdsl.transforms.experimental import lower_dlt_to_
+from xdsl.transforms.experimental.dlt import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import PassByPointerRewriter
 from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter, _make_dense_layouts
 from xdsl.transforms.experimental.generate_dlt_ptr_identities import DLTGeneratePtrIdentitiesRewriter, \
@@ -429,6 +429,7 @@ class LibBuilder:
             print(f"Reifying {ident.data}")
             ptr = new_type_map.pop(ident)
             new_layout = _make_dense_layouts(ptr.layout, {})
+            # new_layout = dlt.StructLayoutAttr([new_layout])
             new_ptr = ptr.with_new_layout(new_layout, preserve_ident=True)
             new_type_map[ident] = new_ptr
             layout_graph.propagate_type(ident, new_type_map)
@@ -445,8 +446,11 @@ class LibBuilder:
         if not check:
             raise ValueError("Layout Graph has been check and found to be inconsistent")
 
-        layout_graph.use_types(new_type_map).rewrite_op(scope_op)
-
+        print("making type updating pass")
+        rewriter = layout_graph.use_types(new_type_map)
+        print("rewriting types")
+        rewriter.rewrite_op(scope_op)
+        print("verifying module")
         module.verify()
 
         print(module)

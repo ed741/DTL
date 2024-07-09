@@ -855,7 +855,7 @@ class DTUpCOO(IndexedDataTreeNode):
         current_address = idx_address + (idx_start * idx_step)
         current_data_address = data_address + (idx_start * data_step)
 
-        while current_address < idx_address + idx_end:
+        while current_address < idx_address + (idx_end * idx_step):
             index_values = [int(holder.get(c)) for c in
                             range(current_address, current_address + (index_size * n_indices), index_size)]
             match = True

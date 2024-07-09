@@ -17,7 +17,7 @@ from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternAppl
 from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental.dlt import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import PassByPointerRewriter
-from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter, _make_dense_layouts
+from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter, _make_dense_layouts, _try_apply_sparse
 from xdsl.transforms.experimental.generate_dlt_ptr_identities import DLTGeneratePtrIdentitiesRewriter, \
     DLTSimplifyPtrIdentitiesRewriter
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
@@ -375,11 +375,15 @@ class LibBuilder:
     def build(self):
         malloc_func = llvm.FuncOp("malloc", llvm.LLVMFunctionType([builtin.i64], llvm.LLVMPointerType.opaque()),
                                   linkage=llvm.LinkageAttr("external"))
+        free_func = llvm.FuncOp("free", llvm.LLVMFunctionType([llvm.LLVMPointerType.opaque()], None),
+                                  linkage=llvm.LinkageAttr("external"))
+        memcpy_func = llvm.FuncOp("memcpy", llvm.LLVMFunctionType([llvm.LLVMPointerType.opaque(), llvm.LLVMPointerType.opaque(), builtin.i64], None),
+                                  linkage=llvm.LinkageAttr("external"))
         abort_func = llvm.FuncOp("abort", llvm.LLVMFunctionType([]),
                                  linkage=llvm.LinkageAttr("external"))
 
         scope_op = dlt.LayoutScopeOp([], self.funcs)
-        module = ModuleOp([malloc_func, abort_func, scope_op])
+        module = ModuleOp([malloc_func, free_func, memcpy_func, abort_func, scope_op])
         module.verify()
 
         print(module)
@@ -428,7 +432,8 @@ class LibBuilder:
             ident = idents.pop()
             print(f"Reifying {ident.data}")
             ptr = new_type_map.pop(ident)
-            new_layout = _make_dense_layouts(ptr.layout, {})
+            new_layout = _try_apply_sparse(ptr.layout)
+            new_layout = _make_dense_layouts(new_layout, {})
             # new_layout = dlt.StructLayoutAttr([new_layout])
             new_ptr = ptr.with_new_layout(new_layout, preserve_ident=True)
             new_type_map[ident] = new_ptr
@@ -495,12 +500,18 @@ class LibBuilder:
             walk_regions_first=False)
 
         print(module)
+        module.verify()
 
         dlt_to_llvm_applier.rewrite_module(module)
+
+        print(module)
+        module.verify()
+
         rem_scope = PatternRewriteWalker(GreedyRewritePatternApplier(
             [lower_dlt_to_.DLTScopeRewriter(),
              lower_dlt_to_.DLTPtrTypeRewriter(recursive=True),
              lower_dlt_to_.DLTIndexTypeRewriter(recursive=True),
+             lower_dlt_to_.DLTIndexRangeTypeRewriter(recursive=True),
              ])
         )
         rem_scope.rewrite_module(module)

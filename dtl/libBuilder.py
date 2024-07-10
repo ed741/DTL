@@ -20,7 +20,7 @@ from xdsl.transforms.experimental.convert_return_to_pointer_arg import PassByPoi
 from xdsl.transforms.experimental.generate_dlt_layouts import DLTLayoutRewriter, _make_dense_layouts, _try_apply_sparse
 from xdsl.transforms.experimental.generate_dlt_ptr_identities import DLTGeneratePtrIdentitiesRewriter, \
     DLTSimplifyPtrIdentitiesRewriter
-from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLDenseRewriter
+from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLRewriter
 from xdsl.transforms.printf_to_llvm import PrintfToLLVM
 from xdsl.transforms.printf_to_putchar import PrintfToPutcharPass
 from xdsl.transforms.reconcile_unrealized_casts import reconcile_unrealized_casts
@@ -389,7 +389,7 @@ class LibBuilder:
         print(module)
 
         # DTL -> DLT
-        dtl_to_dlt_applier = PatternRewriteWalker(DTLDenseRewriter(),
+        dtl_to_dlt_applier = PatternRewriteWalker(DTLRewriter(),
                                                   walk_regions_first=False)
         dtl_to_dlt_applier.rewrite_module(module)
         module.verify()
@@ -432,7 +432,8 @@ class LibBuilder:
             ident = idents.pop()
             print(f"Reifying {ident.data}")
             ptr = new_type_map.pop(ident)
-            new_layout = _try_apply_sparse(ptr.layout)
+            new_layout = ptr.layout
+            new_layout = _try_apply_sparse(new_layout)
             new_layout = _make_dense_layouts(new_layout, {})
             # new_layout = dlt.StructLayoutAttr([new_layout])
             new_ptr = ptr.with_new_layout(new_layout, preserve_ident=True)

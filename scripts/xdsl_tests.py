@@ -96,7 +96,7 @@ def benchmark():
     lib.mm(out, a, b)
 
 
-result = timeit.timeit(benchmark, number=1)
+result = timeit.timeit(benchmark, number=1000)
 print("Matrix Mul")
 
 print("a:")

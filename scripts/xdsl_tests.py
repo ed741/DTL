@@ -28,6 +28,7 @@ output_t_var = TensorVariable(vQ*vS, "out")
 
 set_AB = dag.ExprTuple((Expr.exprInputConversion(2)[i:vQ, j:v10].forall(i,j), Expr.exprInputConversion(3)[j:v10, k:vS].forall(j,k)))
 matMul = (A[i,j]*B[j,k]).sum(j).forall(i,k)
+matMul = (A[i,j]*B[j,k]+1).sum(j).forall(i).forall(k)
 
 lib_builder = LibBuilder()
 lib_builder.make_dummy("test", 3)

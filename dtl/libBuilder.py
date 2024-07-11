@@ -392,6 +392,7 @@ class LibBuilder:
         dtl_to_dlt_applier = PatternRewriteWalker(DTLRewriter(),
                                                   walk_regions_first=False)
         dtl_to_dlt_applier.rewrite_module(module)
+        print(module)
         module.verify()
 
         first_identity_gen = DLTGeneratePtrIdentitiesRewriter()
@@ -459,7 +460,7 @@ class LibBuilder:
         print("verifying module")
         module.verify()
 
-        print(module)
+        # print(module)
 
         # # generate-layouts-> DLT
         # dlt_to_dlt_applier = PatternRewriteWalker(DLTLayoutRewriter(),
@@ -500,12 +501,12 @@ class LibBuilder:
              ]),
             walk_regions_first=False)
 
-        print(module)
-        module.verify()
+        # print(module)
+        # module.verify()
 
         dlt_to_llvm_applier.rewrite_module(module)
 
-        print(module)
+        # print(module)
         module.verify()
 
         rem_scope = PatternRewriteWalker(GreedyRewritePatternApplier(

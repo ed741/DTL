@@ -495,6 +495,7 @@ class LibBuilder:
              lower_dlt_to_.DLTGetRewriter(),
              lower_dlt_to_.DLTSetRewriter(),
              lower_dlt_to_.DLTAllocRewriter(),
+             lower_dlt_to_.DLTDeallocRewriter(),
              lower_dlt_to_.DLTIterateRewriter(),
              lower_dlt_to_.DLTCopyRewriter(),
              lower_dlt_to_.DLTExtractExtentRewriter(),
@@ -506,7 +507,7 @@ class LibBuilder:
 
         dlt_to_llvm_applier.rewrite_module(module)
 
-        # print(module)
+        print(module)
         module.verify()
 
         rem_scope = PatternRewriteWalker(GreedyRewritePatternApplier(

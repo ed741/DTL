@@ -28,7 +28,9 @@ output_t_var = TensorVariable(vQ*vS, "out")
 
 set_AB = dag.ExprTuple((Expr.exprInputConversion(2)[i:vQ, j:v10].forall(i,j), Expr.exprInputConversion(3)[j:v10, k:vS].forall(j,k)))
 matMul = (A[i,j]*B[j,k]).sum(j).forall(i,k)
-matMul = (A[i,j]*B[j,k]+1).sum(j).forall(i).forall(k)
+# t1, t2, t3 = dag.ExprTuple([5, 4, 3]).tuple()
+# q_vec = (t1+t2)[j:vQ].forall(j)
+# matMul = (A[i,j]*B[j,k]+1+q_vec[i]).sum(j).forall(i).forall(k)
 
 lib_builder = LibBuilder()
 lib_builder.make_dummy("test", 3)
@@ -70,9 +72,9 @@ print("Done lib.test()")
 # a_root, a = lib.init_A(3)
 # b_root, b = lib.init_B(5)
 
-ab_root, a, b = lib.init_AB(3,5)
+ab_root, a, b = lib.init_AB(30,50)
 print("inited A")
-out_root, out = lib.init_Out(3, 5)
+out_root, out = lib.init_Out(30, 50)
 print("inited a,b,out")
 
 print("a:")
@@ -97,7 +99,7 @@ def benchmark():
     lib.mm(out, a, b)
 
 
-result = timeit.timeit(benchmark, number=1000)
+result = timeit.timeit(benchmark, number=1)
 print("Matrix Mul")
 
 print("a:")

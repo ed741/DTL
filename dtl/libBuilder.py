@@ -15,9 +15,10 @@ from dtl import (
     Index,
 )
 from dtlpp.backends import xdsl as xdtl
+from scripts.visualiseDLT import IterationPlotter
 from xdsl import ir
 from xdsl.dialects import builtin, arith, printf, llvm, func
-from xdsl.dialects.builtin import f32, IndexType, ModuleOp, i64
+from xdsl.dialects.builtin import FunctionType, f32, IndexType, ModuleOp, i64
 from xdsl.dialects.experimental import dlt
 from xdsl.dialects.func import Return, FuncOp
 from xdsl.ir import Attribute, Region, MLContext, TypeAttribute
@@ -27,11 +28,15 @@ from xdsl.transforms.experimental.dlt import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import (
     PassByPointerRewriter,
 )
-from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import _make_nested_order
+from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
+    IterationGenerator,
+    _make_nested_order,
+)
 from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
 from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
 from xdsl.transforms.experimental.dlt.generate_dlt_layouts import (
-    LayoutGenerator, _make_dense_layouts,
+    LayoutGenerator,
+    _make_dense_layouts,
     _try_apply_index_replace,
     _try_apply_sparse,
 )
@@ -81,9 +86,9 @@ class FunctionCaller:
             func_args.append(ctypes.pointer(rets[-1]))
         for param_type, arg in zip(self.param_types, args):
             if not isinstance(arg, param_type):
-                print(type(arg))
-                print(param_type)
-                print(type(arg) == param_type)
+                # print(type(arg))
+                # print(param_type)
+                # print(type(arg) == param_type)
                 arg = param_type(arg)  # try to make init the right type?
             assert isinstance(arg, param_type)
             if isinstance(arg, StructType):
@@ -133,7 +138,10 @@ class DTLCLib:
             return self._callers[name]
         func_descriptor = self._funcs[name]
         func_type = self._func_types[name]
-        assert len(func_type.inputs) == len(func_descriptor.params)
+        if len(func_type.inputs) != len(func_descriptor.params):
+            print(name)
+            print(func_type.inputs)
+            print(func_descriptor.params)
         assert len(func_type.outputs) == len(func_descriptor.return_types)
         ret_types = list(func_type.outputs.data)
         param_types = list(func_type.inputs.data)
@@ -147,7 +155,12 @@ class DTLCLib:
             for t, dlt_t in zip(param_types, func_descriptor.params)
         ]
         self._lib[name].argtypes = ctype_ret_pointer_types + ctype_param_types
-        caller = FunctionCaller(self._lib[name], ctype_param_types, ctype_ret_types)
+        caller = FunctionCaller(
+            self._lib[name],
+            ctype_param_types,
+            ctype_ret_types,
+            return_structure=func_descriptor.structure,
+        )
         self._callers[name] = caller
         return caller
 
@@ -176,6 +189,15 @@ class DTLCLib:
         else:
             raise NotImplementedError(
                 f"Cannot convert Integer type: {llvm_type} to ctypes"
+            )
+
+    @_convert_llvm_type_to_ctypes.register
+    def _(self, llvm_type: builtin.Float32Type, dlt_type: TypeAttribute = None):
+        if llvm_type == builtin.f32:
+            return ctypes.c_float
+        else:
+            raise NotImplementedError(
+                f"Cannot convert Floating type: {llvm_type} to ctypes"
             )
 
     @_convert_llvm_type_to_ctypes.register
@@ -436,6 +458,7 @@ class LibBuilder:
         name: str,
         tensor_vars: TupleStruct[TensorVariable],
         extents: list[UnknownSizeVectorSpace],
+        free_name: str = None,
     ):
         ptr_type, elements = self._get_tensor_var_info(tensor_vars)
         base_ptr_type = ptr_type.as_base()
@@ -476,6 +499,23 @@ class LibBuilder:
         self.func_map[name] = FuncTypeDescriptor(
             list(func_type.inputs), list(func_type.outputs), (1, tensor_vars)
         )
+
+        if free_name != None:
+            free_block = ir.Block()
+            free_block.add_op(dlt.DeallocOp(free_block.insert_arg(base_ptr_type, 0)))
+            free_block.add_op(ret := Return())
+            free_region = Region([free_block])
+            free_argTypes = [arg.type for arg in free_block.args]
+            free_retTypes = [r.type for r in ret.operands]
+            free_func = FuncOp.from_region(
+                free_name, free_argTypes, free_retTypes, free_region
+            )
+            self.funcs.append(free_func)
+            free_func_type = free_func.function_type
+            self.func_map[free_name] = FuncTypeDescriptor(
+                list(free_func_type.inputs), list(free_func_type.outputs), None
+            )
+
         return func
 
     def make_dummy(self, name, ret_val):
@@ -533,6 +573,47 @@ class LibBuilder:
         func_type = func.function_type
         self.func_map[name] = FuncTypeDescriptor(
             list(func_type.inputs), list(func_type.outputs), None
+        )
+        return func
+
+    def make_getter(
+        self,
+        name,
+        tensor_var: TensorVariable,
+        members: typing.Iterable[dlt.MemberAttr],
+        args: list[int],
+    ):
+        block = ir.Block()
+        ptr_type, element = self._get_tensor_var_info(tensor_var)
+        dims = self.tensor_var_dims[tensor_var]
+
+        dlt_tensor = block.insert_arg(ptr_type, 0)
+
+        assert len(args) == len(tensor_var.tensor_space.spaces)
+        index_args = []
+        for i in range(max(args) + 1):
+            index_args.append(block.insert_arg(IndexType(), len(block.args)))
+
+        dim_values = []
+        for arg_idx in args:
+            dim_values.append(index_args[arg_idx])
+
+        select = dlt.SelectOp(dlt_tensor, members, dims, dim_values)
+        block.add_op(select)
+
+        load = dlt.GetOp(select.res, element.base_type)
+        block.add_op(load)
+        ret = Return(load.res)
+        block.add_op(ret)
+
+        region = Region([block])
+        argTypes = [arg.type for arg in block.args]
+        retTypes = [r.type for r in ret.operands]
+        func = FuncOp.from_region(name, argTypes, retTypes, region)
+        self.funcs.append(func)
+        func_type = func.function_type
+        self.func_map[name] = FuncTypeDescriptor(
+            list(func_type.inputs), list(func_type.outputs), 1
         )
         return func
 
@@ -656,11 +737,13 @@ class LibBuilder:
         self.funcs.append(func)
         func_type = func.function_type
         self.func_map[name] = FuncTypeDescriptor(
-            list(func_type.inputs), list(func_type.outputs), tuple(results)
+            list(func_type.inputs), list(func_type.outputs), None
         )
         return func
 
-    def prepare(self) -> tuple[ModuleOp, LayoutGraph, IterationMap]:
+    def prepare(self, verbose=2) -> tuple[ModuleOp, LayoutGraph, IterationMap]:
+        if verbose > 0:
+            print(f"Preparing module")
         malloc_func = llvm.FuncOp(
             "malloc",
             llvm.LLVMFunctionType([builtin.i64], llvm.LLVMPointerType.opaque()),
@@ -691,14 +774,16 @@ class LibBuilder:
         module = ModuleOp([malloc_func, free_func, memcpy_func, abort_func, scope_op])
         module.verify()
 
-        print(module)
+        if verbose > 1:
+            print(module)
 
         # DTL -> DLT
         dtl_to_dlt_applier = PatternRewriteWalker(
             DTLRewriter(), walk_regions_first=False
         )
         dtl_to_dlt_applier.rewrite_module(module)
-        print(module)
+        if verbose > 1:
+            print(module)
         module.verify()
 
         first_identity_gen = DLTGeneratePtrIdentitiesRewriter()
@@ -726,7 +811,8 @@ class LibBuilder:
 
         module.verify()
 
-        print(module)
+        if verbose > 1:
+            print(module)
 
         layout_graph = layout_graph_generator.layouts[scope_op]
         iteration_map = iteration_map_generator.iteration_maps[scope_op]
@@ -736,39 +822,52 @@ class LibBuilder:
 
         check = layout_graph.is_consistent()
         if not check:
-            raise ValueError("Layout Graph has been checked and found to be inconsistent")
+            raise ValueError(
+                "Layout Graph has been checked and found to be inconsistent"
+            )
         check = iteration_map.is_consistent()
         if not check:
-            raise ValueError("Iteration Map has been checked and found to be inconsistent")
+            raise ValueError(
+                "Iteration Map has been checked and found to be inconsistent"
+            )
         return module, layout_graph, iteration_map
 
-    def compile(
+    def lower(
         self,
         module: ModuleOp,
         layout_graph: LayoutGraph,
         new_type_map: dict[builtin.StringAttr, dlt.PtrType],
         iteration_map: IterationMap,
         new_order_map: dict[builtin.StringAttr, dlt.IterationOrder],
-    ) -> DTLCLib:
+        verbose=2,
+    ):
+        if verbose > 0:
+            print(f"Compiling module")
         check = layout_graph.is_consistent(new_type_map)
         if not check:
             raise ValueError("Layout Graph has been check and found to be inconsistent")
-
-        print("making dlt.ptr type updating pass")
+        if verbose > 1:
+            print("making dlt.ptr type updating pass")
         rewriter = layout_graph.use_types(new_type_map)
-        print("rewriting types")
+        if verbose > 1:
+            print("rewriting types")
         rewriter.rewrite_op(module)
-        print("verifying module")
+        if verbose > 1:
+            print("verifying module")
         module.verify()
 
-        print("making iteration order updating pass")
+        if verbose > 1:
+            print("making iteration order updating pass")
         rewriter = iteration_map.use_orders(new_order_map)
-        print("rewriting iterate ops")
+        if verbose > 1:
+            print("rewriting iterate ops")
         rewriter.rewrite_op(module)
-        print("verifying module")
+        if verbose > 1:
+            print("verifying module")
         module.verify()
 
-        print(module)
+        if verbose > 1:
+            print(module)
 
         # DLT -> MLIR builtin
         dlt_to_llvm_applier = PatternRewriteWalker(
@@ -793,7 +892,8 @@ class LibBuilder:
 
         dlt_to_llvm_applier.rewrite_module(module)
 
-        print(module)
+        if verbose > 1:
+            print(module)
         module.verify()
 
         rem_scope = PatternRewriteWalker(
@@ -825,11 +925,22 @@ class LibBuilder:
         reconcile_unrealized_casts(module)
         module.verify()
 
-        print(module)
+        if verbose > 1:
+            print(module)
+        return function_types
+
+    def compile(
+        self,
+        module: ModuleOp,
+        function_types: dict[builtin.StringAttr, func.FunctionType],
+        verbose=2,
+    ) -> DTLCLib:
 
         lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
-        print(lib_name)
-        compilec.compile(module, lib_name)
+
+        if verbose > 0:
+            print(f"libary name: {lib_name}")
+        compilec.compile(module, lib_name, verbose=verbose)
         function_types = {name.data: v for name, v in function_types.items()}
 
         return DTLCLib(lib_name, self.func_map, function_types)
@@ -838,8 +949,10 @@ class LibBuilder:
 
         module, layout_graph, iteration_map = self.prepare()
 
+        iteration_generator = IterationGenerator(iteration_map)
+        new_iter_maps = iteration_generator.generate_mappings()
         layout_generator = LayoutGenerator(layout_graph)
-        layout_generator.generate_mappings()
+        new_layout_maps = layout_generator.generate_mappings()
 
         original_type_map = layout_graph.get_type_map()
         new_type_map = original_type_map.copy()
@@ -877,9 +990,12 @@ class LibBuilder:
 
         original_order_map = iteration_map.get_map()
         new_order_map = original_order_map.copy()
-        new_orders = {id: _make_nested_order(order) for id, order in new_order_map.items()}
+        new_orders = {
+            id: _make_nested_order(order) for id, order in new_order_map.items()
+        }
 
-        return self.compile(module, layout_graph, new_type_map, iteration_map, new_orders)
+        function_types = self.lower(module, layout_graph, new_type_map, iteration_map, new_orders)
+        return self.compile(module, function_types)
 
 
 """

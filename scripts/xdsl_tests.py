@@ -72,7 +72,7 @@ print("Done lib.test()")
 # a_root, a = lib.init_A(3)
 # b_root, b = lib.init_B(5)
 
-ab_root, a, b = lib.init_AB(30,50)
+ab_root, (a, b) = lib.init_AB(30,50)
 print("inited A")
 out_root, out = lib.init_Out(30, 50)
 print("inited a,b,out")

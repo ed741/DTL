@@ -207,21 +207,21 @@ class StaticSingles(MatMul):
 
 if __name__ == '__main__':
     static_benchmark = StaticTriple(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    static_benchmark.skip_testing = True
+    # static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticPair(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    static_benchmark.skip_testing = True
+    # static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticSingles(128, 128, 128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    static_benchmark.skip_testing = True
+    # static_benchmark.skip_testing = True
     static_benchmark.run()
 
     static_benchmark = StaticTriple(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    static_benchmark.skip_testing = True
+    # static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticPair(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    static_benchmark.skip_testing = True
+    # static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticSingles(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    static_benchmark.skip_testing = True
+    # static_benchmark.skip_testing = True
     static_benchmark.run()

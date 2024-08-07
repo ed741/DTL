@@ -50,7 +50,8 @@ from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLRewriter
 from xdsl.transforms.printf_to_llvm import PrintfToLLVM
 from xdsl.transforms.printf_to_putchar import PrintfToPutcharPass
 from xdsl.transforms.reconcile_unrealized_casts import reconcile_unrealized_casts
-from xdslDTL import compilec
+
+from dtl import compilec
 
 _T = typing.TypeVar("_T")
 TupleStruct: typing.TypeAlias = typing.Union[tuple["TupleStruct[_T]", ...], _T]

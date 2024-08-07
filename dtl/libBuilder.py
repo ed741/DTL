@@ -6,6 +6,7 @@ from ctypes import cdll
 from dataclasses import dataclass
 from typing import Tuple
 
+import dtl
 from dtl import (
     VectorSpaceVariable,
     UnknownSizeVectorSpace,
@@ -237,7 +238,11 @@ class StructType(ctypes.Structure):
 
 
 class LibBuilder:
-    def __init__(self):
+    def __init__(self, scope_extents: dict[dtl.UnknownSizeVectorSpace, int] = None):
+        if scope_extents is None:
+            scope_extents = {}
+        self._scope_vector_spaces = scope_extents
+
         self.vs_namer = {}
         self.vs_name_idx = 0
         self.tensor_var_details: dict[TupleStruct[TensorVariable], dlt.PtrType] = {}
@@ -265,7 +270,10 @@ class LibBuilder:
 
     def _get_vs_extent(self, vs: VectorSpaceVariable):
         if isinstance(vs, UnknownSizeVectorSpace):
-            return dlt.InitDefinedExtentAttr(vs.name)
+            if vs in self._scope_vector_spaces:
+                return dlt.ScopeDefinedExtentAttr(vs.name)
+            else:
+                return dlt.InitDefinedExtentAttr(vs.name)
         if isinstance(vs, VectorSpace):
             return dlt.StaticExtentAttr(vs.dim)
 
@@ -618,18 +626,18 @@ class LibBuilder:
         return func
 
     def make_print_tensorVar(
-        self, name: str, tensor_var, extents: list[UnknownSizeVectorSpace]
+        self, name: str, tensor_var, dynamic_vector_spaces: list[UnknownSizeVectorSpace]
     ):
         block = ir.Block()
         ptr_type, elements = self._get_tensor_var_info(tensor_var)
         dims = self.tensor_var_dims[tensor_var]
         tensor_var_arg = block.insert_arg(ptr_type, 0)
-        arg_idx = 1
+
         dynamic_extents = {}
-        for extent in extents:
-            arg = block.insert_arg(IndexType(), arg_idx)
-            arg_idx += 1
-            dynamic_extents[self._get_vs_extent(extent)] = arg
+        for vs in dynamic_vector_spaces:
+            arg = block.insert_arg(IndexType(), len(block.args))
+            dynamic_extents[self._get_vs_extent(vs)] = arg
+
         extents = [dim.extent for dim in dims]
         extent_args = []
         for e in extents:
@@ -721,7 +729,8 @@ class LibBuilder:
 
         exec, output = xdtl.get_xdsl_dtl_exec_version(
             expr,
-            space_map=dynamic_extents,
+            dynamic_space_map=dynamic_extents,
+            scope_spaces=set(self._scope_vector_spaces.keys()),
             arg_map=arg_map,
             tensor_variables=tensor_variables,
             outputs=outputs,
@@ -770,7 +779,7 @@ class LibBuilder:
             "abort", llvm.LLVMFunctionType([]), linkage=llvm.LinkageAttr("external")
         )
 
-        scope_op = dlt.LayoutScopeOp([], self.funcs)
+        scope_op = dlt.LayoutScopeOp([(dlt.ScopeDefinedExtentAttr(vs.name), i) for vs, i in self._scope_vector_spaces.items()], self.funcs)
         module = ModuleOp([malloc_func, free_func, memcpy_func, abort_func, scope_op])
         module.verify()
 
@@ -950,9 +959,9 @@ class LibBuilder:
         module, layout_graph, iteration_map = self.prepare()
 
         iteration_generator = IterationGenerator(iteration_map)
-        new_iter_maps = iteration_generator.generate_mappings()
+        # new_iter_maps = iteration_generator.generate_mappings()
         layout_generator = LayoutGenerator(layout_graph)
-        new_layout_maps = layout_generator.generate_mappings()
+        # new_layout_maps = layout_generator.generate_mappings()
 
         original_type_map = layout_graph.get_type_map()
         new_type_map = original_type_map.copy()

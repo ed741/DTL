@@ -13,21 +13,22 @@ import functools
 
 
 def get_xdsl_dtl_exec_version(expression: dtl.Expr,
-                              space_map: typing.Dict[dtl.UnknownSizeVectorSpace, SSAValue],
-                              arg_map: typing.Dict[dtl.Index, SSAValue],
-                              tensor_variables: typing.Dict[dtl.TensorVariable, tuple[SSAValue,list[str]]],
+                              dynamic_space_map: dict[dtl.UnknownSizeVectorSpace, SSAValue],
+                              scope_spaces: set[dtl.UnknownSizeVectorSpace],
+                              arg_map: dict[dtl.Index, SSAValue],
+                              tensor_variables: dict[dtl.TensorVariable, tuple[SSAValue,list[str]]],
                               outputs: list[tuple[SSAValue, list[str]]]
                               ):
     block = Block()
 
 
 
-    extent_names = []
+    dynamic_extent_names = []
     # extent_args = []
-    for s, l in space_map.items():
+    for s, l in dynamic_space_map.items():
         space = vectorSpace_to_xdtl(s)
         assert isinstance(space, xdtl.UnknownVectorSpace)
-        extent_names.append(space)
+        dynamic_extent_names.append(space)
 
     assert isinstance(expression.type.result, dtl.ShapeType) or (
         isinstance(expression.type.result, dtl.ResultTupleType) and
@@ -46,8 +47,10 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
             if isinstance(vs, dtl.UnknownSizeVectorSpace):
                 if dlt.InitDefinedExtentAttr(vs.name) in ssa.type.filled_extents:
                     extent = dlt.InitDefinedExtentAttr(vs.name)
-                elif xdtl.UnknownVectorSpace(vs.name) in extent_names:
+                elif vs in dynamic_extent_names:
                     extent = dlt.DynamicExtentAttr(vs.name)
+                elif vs in scope_spaces:
+                    extent = dlt.ScopeDefinedExtentAttr(vs.name)
                 else:
                     raise ValueError("Cannot find extent for vector space")
             elif isinstance(vs, dtl.VectorSpace):
@@ -70,8 +73,10 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
             if isinstance(vs, dtl.UnknownSizeVectorSpace):
                 if dlt.InitDefinedExtentAttr(vs.name) in ssa.type.filled_extents:
                     extent = dlt.InitDefinedExtentAttr(vs.name)
-                elif xdtl.UnknownVectorSpace(vs.name) in extent_names:
+                elif vs in dynamic_extent_names:
                     extent = dlt.DynamicExtentAttr(vs.name)
+                elif vs in scope_spaces:
+                    extent = dlt.ScopeDefinedExtentAttr(vs.name)
                 else:
                     raise ValueError("Cannot find extent for vector space")
             elif isinstance(vs, dtl.VectorSpace):
@@ -93,7 +98,7 @@ def get_xdsl_dtl_exec_version(expression: dtl.Expr,
     block.add_op(yield_op)
 
     execOp = xdtl.InPlaceExecuteTensorOp([block],
-                                         [(vectorSpace_to_xdtl(vs),v) for vs,v in space_map.items()],
+                                         [(vectorSpace_to_xdtl(vs),v) for vs,v in dynamic_space_map.items()],
                                          [(i,v) for i,v in arg_map.items()],
                                          [o for o, l in outputs],
                                          builtin.ArrayAttr(output_tensors_dim_names),

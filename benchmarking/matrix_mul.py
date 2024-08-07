@@ -61,6 +61,35 @@ class MatMul(Benchmark, abc.ABC):
         self.np_b = np_b
         self.np_c = np_c
 
+
+    @abc.abstractmethod
+    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+        raise NotImplementedError
+
+    def define_lib_builder(self) -> LibBuilder:
+        vi = UnknownSizeVectorSpace("vi")
+        vj = UnknownSizeVectorSpace("vj")
+        vk = UnknownSizeVectorSpace("vk")
+        A = TensorVariable(vi * vj, "A")
+        B = TensorVariable(vj * vk, "B")
+        C = TensorVariable(vi * vk, "C")
+
+        _i = Index('i')
+        _j = Index('j')
+        _k = Index('k')
+        matmul = (A[_i, _j] * B[_j, _k]).sum(_j).forall(_i, _k)
+
+        lib_builder = LibBuilder({vi: self.i, vj: self.j, vk: self.k})
+        lib_builder.make_setter("set_A", (A), {}, [0, 1])
+        lib_builder.make_setter("set_B", (B), {}, [0, 1])
+
+        lib_builder.make_getter("get_C", (C), {}, [0, 1])
+        lib_builder.make_function("matmul", matmul, [C], [A, B], [], [])
+        self.construct_lib_builder(lib_builder, A, B, C)
+
+        return lib_builder
+
+
     @abc.abstractmethod
     def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
         raise NotImplementedError
@@ -116,27 +145,9 @@ class StaticTriple(MatMul):
         name = "static_triple"
         super().__init__(i, j, k, seed, base_dir, name, runs, repeats, epsilon)
 
-    def define_lib_builder(self) -> LibBuilder:
-        vi = RealVectorSpace(self.i)
-        vj = RealVectorSpace(self.j)
-        vk = RealVectorSpace(self.k)
-        A = TensorVariable(vi * vj, "A")
-        B = TensorVariable(vj * vk, "B")
-        C = TensorVariable(vi * vk, "C")
+    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+        lib_builder.make_init("init", (a, b, c), [], free_name="dealloc")
 
-        _i = Index('i')
-        _j = Index('j')
-        _k = Index('k')
-        matmul = (A[_i, _j] * B[_j, _k]).sum(_j).forall(_i, _k)
-
-        lib_builder = LibBuilder()
-        lib_builder.make_init("init", (A, B, C), [], free_name="dealloc")
-        lib_builder.make_setter("set_A", (A), {}, [0, 1])
-        lib_builder.make_setter("set_B", (B), {}, [0, 1])
-
-        lib_builder.make_getter("get_C", (C), {}, [0, 1])
-        lib_builder.make_function("matmul", matmul, [C], [A, B], [], [])
-        return lib_builder
 
     def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
         root, (a, b, c) = lib.init()
@@ -153,28 +164,9 @@ class StaticPair(MatMul):
         name = "static_pair"
         super().__init__(i, j, k, seed, base_dir, name, runs, repeats, epsilon)
 
-    def define_lib_builder(self) -> LibBuilder:
-        vi = RealVectorSpace(self.i)
-        vj = RealVectorSpace(self.j)
-        vk = RealVectorSpace(self.k)
-        A = TensorVariable(vi * vj, "A")
-        B = TensorVariable(vj * vk, "B")
-        C = TensorVariable(vi * vk, "C")
-
-        _i = Index('i')
-        _j = Index('j')
-        _k = Index('k')
-        matmul = (A[_i, _j] * B[_j, _k]).sum(_j).forall(_i, _k)
-
-        lib_builder = LibBuilder()
-        lib_builder.make_init("init_AB", (A, B), [], free_name="dealloc_AB")
-        lib_builder.make_init("init_C", (C), [], free_name="dealloc_C")
-        lib_builder.make_setter("set_A", (A), {}, [0, 1])
-        lib_builder.make_setter("set_B", (B), {}, [0, 1])
-
-        lib_builder.make_getter("get_C", (C), {}, [0, 1])
-        lib_builder.make_function("matmul", matmul, [C], [A, B], [], [])
-        return lib_builder
+    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+        lib_builder.make_init("init_AB", (a, b), [], free_name="dealloc_AB")
+        lib_builder.make_init("init_C", (c), [], free_name="dealloc_C")
 
     def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
         root_ab, (a, b) = lib.init_AB()
@@ -193,29 +185,11 @@ class StaticSingles(MatMul):
         name = "static_singles"
         super().__init__(i, j, k, seed, base_dir, name, runs, repeats, epsilon)
 
-    def define_lib_builder(self) -> LibBuilder:
-        vi = RealVectorSpace(self.i)
-        vj = RealVectorSpace(self.j)
-        vk = RealVectorSpace(self.k)
-        A = TensorVariable(vi * vj, "A")
-        B = TensorVariable(vj * vk, "B")
-        C = TensorVariable(vi * vk, "C")
 
-        _i = Index('i')
-        _j = Index('j')
-        _k = Index('k')
-        matmul = (A[_i, _j] * B[_j, _k]).sum(_j).forall(_i, _k)
-
-        lib_builder = LibBuilder()
-        lib_builder.make_init("init_A", (A), [], free_name="dealloc_A")
-        lib_builder.make_init("init_B", (B), [], free_name="dealloc_B")
-        lib_builder.make_init("init_C", (C), [], free_name="dealloc_C")
-        lib_builder.make_setter("set_A", (A), {}, [0, 1])
-        lib_builder.make_setter("set_B", (B), {}, [0, 1])
-
-        lib_builder.make_getter("get_C", (C), {}, [0, 1])
-        lib_builder.make_function("matmul", matmul, [C], [A, B], [], [])
-        return lib_builder
+    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+        lib_builder.make_init("init_A", (a), [], free_name="dealloc_A")
+        lib_builder.make_init("init_B", (b), [], free_name="dealloc_B")
+        lib_builder.make_init("init_C", (c), [], free_name="dealloc_C")
 
     def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
         root_a, (a) = lib.init_A()
@@ -231,6 +205,16 @@ class StaticSingles(MatMul):
 
 
 if __name__ == '__main__':
-    # static_benchmark = StaticTriple(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark = StaticTriple(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.run()
+    static_benchmark = StaticPair(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.run()
     static_benchmark = StaticSingles(128, 128, 128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.run()
+
+    static_benchmark = StaticTriple(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.run()
+    static_benchmark = StaticPair(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.run()
+    static_benchmark = StaticSingles(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
     static_benchmark.run()

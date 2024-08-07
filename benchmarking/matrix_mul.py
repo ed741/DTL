@@ -80,12 +80,13 @@ class MatMul(Benchmark, abc.ABC):
         matmul = (A[_i, _j] * B[_j, _k]).sum(_j).forall(_i, _k)
 
         lib_builder = LibBuilder({vi: self.i, vj: self.j, vk: self.k})
+        self.construct_lib_builder(lib_builder, A, B, C)
+
         lib_builder.make_setter("set_A", (A), {}, [0, 1])
         lib_builder.make_setter("set_B", (B), {}, [0, 1])
 
         lib_builder.make_getter("get_C", (C), {}, [0, 1])
         lib_builder.make_function("matmul", matmul, [C], [A, B], [], [])
-        self.construct_lib_builder(lib_builder, A, B, C)
 
         return lib_builder
 
@@ -206,15 +207,21 @@ class StaticSingles(MatMul):
 
 if __name__ == '__main__':
     static_benchmark = StaticTriple(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticPair(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticSingles(128, 128, 128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.skip_testing = True
     static_benchmark.run()
 
     static_benchmark = StaticTriple(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticPair(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.skip_testing = True
     static_benchmark.run()
     static_benchmark = StaticSingles(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
+    static_benchmark.skip_testing = True
     static_benchmark.run()

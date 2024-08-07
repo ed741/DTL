@@ -3,16 +3,11 @@ import subprocess
 import tempfile
 from io import StringIO
 
-from nptyping import Shape, NDArray
-import numpy as np
-
-from xdsl import ir
-from xdsl.dialects import builtin, memref, func
+from xdsl.dialects import builtin
 from xdsl.printer import Printer
 
 
-
-def compile(module: builtin.ModuleOp, lib_output: str, header_out=None, verbose = 2):
+def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None, verbose = 2):
     # if header_out==None:
     #     header_out = lib_output.removesuffix(".o") + ".h"
 
@@ -75,32 +70,21 @@ def compile(module: builtin.ModuleOp, lib_output: str, header_out=None, verbose 
         print(out.decode('utf8'))
         print("stderr:")
         print(err.decode('utf8') if err is not None else None)
-    fd, path = tempfile.mkstemp(suffix=".ll")
+
+    if llvm_out is None:
+        fd, path = tempfile.mkstemp(suffix=".ll")
+    else:
+        fd = open(llvm_out, "wb")
+        path = llvm_out
+
     if verbose > 0:
         print(f"Making tmp llvm-IR file: {path}")
     try:
         with os.fdopen(fd, 'wb') as tmp:
             tmp.write(out)
+            tmp.flush()
 
-            clang_args = ["clang"]
-            clang_args.extend([ '-o', lib_output])
-            clang_args.append('-shared')
-            # clang_args.append("-c")
-            # clang_args.append("-v")
-            clang_args.append("-g")
-            clang_args.append("-O3")
-            clang_args.append(path)
-
-            if verbose > 1:
-                print(" ".join(clang_args))
-            process_clang = subprocess.Popen(clang_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-            # out, err = process_clang.communicate(out)
-            # print("stdout:")
-            # print(out.decode('utf8') if out is not None else None)
-            # print("stderr:")
-            # print(err.decode('utf8') if err is not None else None)
-            process_clang.wait()
-
+        clang_compile(path, lib_output, verbose)
     finally:
         # os.remove(path)
         pass
@@ -109,4 +93,23 @@ def compile(module: builtin.ModuleOp, lib_output: str, header_out=None, verbose 
         print("Done compiling with mlir / clang")
 
 
+def clang_compile(llvm_path: str, lib_output: str, verbose: int = 2):
+    clang_args = ["clang"]
+    clang_args.extend(['-o', lib_output])
+    clang_args.append('-shared')
+    # clang_args.append("-c")
+    # clang_args.append("-v")
+    clang_args.append("-g")
+    clang_args.append("-O3")
+    clang_args.append(llvm_path)
+
+    if verbose > 1:
+        print(" ".join(clang_args))
+    process_clang = subprocess.Popen(clang_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    # out, err = process_clang.communicate(out)
+    # print("stdout:")
+    # print(out.decode('utf8') if out is not None else None)
+    # print("stderr:")
+    # print(err.decode('utf8') if err is not None else None)
+    process_clang.wait()
 

@@ -24,6 +24,7 @@ class Benchmark(abc.ABC):
         self.runs = runs
         self.repeats = repeats
         self.epsilon = epsilon
+        self.skip_testing = False
 
     @abc.abstractmethod
     def define_lib_builder(self) -> LibBuilder:
@@ -103,6 +104,8 @@ class Benchmark(abc.ABC):
                             continue
 
                         if lib is None:
+                            lib_name = f"lib_{new_layout.number}_{new_order.number}"
+                            llvm_path = f"{self.base_dir}/llvm/{lib_name}.ll"
                             print(f"Compiling:  layout={new_layout.number}, iter_order={new_order.number}")
                             module_clone = module.clone()
                             function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
@@ -119,20 +122,29 @@ class Benchmark(abc.ABC):
                                 break
                             else:
                                 duplicates[module_str] = (new_layout.number, new_order.number)
-                            lib = lib_builder.compile(module_clone, function_types, verbose=0)
+
+                            if os.path.exists(llvm_path):
+                                print(f"Found existing LLVM file for layout={new_layout.number}, iter_order={new_order.number}")
+                                lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
+                            else:
+                                lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path, verbose=0)
 
                         print(
                             f"{datetime.datetime.now()} Running benchmark :: layout: {new_layout.number}, order: {new_order.number}, rep: {rep} ",
                             end="")
-                        result, epsilon_correct, error_per_run, bit_repeatable = self._run_benchmark(lib)
-                        result_writer.writerow(
-                            [new_layout.number, new_order.number, rep, result, epsilon_correct, error_per_run,
-                             bit_repeatable])
-                        csv_results.flush()
-                        results.append(result)
-                        results_correct &= epsilon_correct
-                        print(
-                            f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable}")
+
+                        if self.skip_testing:
+                            print(f"Skipping testing")
+                        else:
+                            result, epsilon_correct, error_per_run, bit_repeatable = self._run_benchmark(lib)
+                            result_writer.writerow(
+                                [new_layout.number, new_order.number, rep, result, epsilon_correct, error_per_run,
+                                 bit_repeatable])
+                            csv_results.flush()
+                            results.append(result)
+                            results_correct &= epsilon_correct
+                            print(
+                                f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable}")
 
         print("finished")
 

@@ -250,6 +250,7 @@ class LibBuilder:
         self.tensor_var_elems: dict[
             TupleStruct[TensorVariable], TupleStruct[dlt.ElementAttr]
         ] = {}
+        self.tensor_elem_tuple_name_idx = 0
         # self.tensor_var_ptrs: dict[TupleStruct[TensorVariable], dlt.PtrType] = {}
         self.tensor_var_dims: dict[TensorVariable, list[dlt.DimensionAttr]] = {}
         self.tensor_var_namer_idx = 0
@@ -307,14 +308,18 @@ class LibBuilder:
     #     return new_members
 
     def _set_dlt_type_elems_for_tensor_var(
-        self, tensor_vars: TupleStruct[TensorVariable], level=0
+        self, tensor_vars: TupleStruct[TensorVariable]
     ) -> TupleStruct[dlt.ElementAttr]:
-        assert tensor_vars not in self.tensor_var_elems
+        if tensor_vars in self.tensor_var_elems:
+            assert tensor_vars not in self.tensor_var_elems
         if isinstance(tensor_vars, tuple):
             elements: TupleStruct[dlt.ElementAttr] = tuple()
+            level = str(self.tensor_elem_tuple_name_idx)
+            self.tensor_elem_tuple_name_idx += 1
+
             for i, tensor_var in enumerate(tensor_vars):
                 child_elements = self._set_dlt_type_elems_for_tensor_var(
-                    tensor_var, level=level + 1
+                    tensor_var
                 )
                 new_member = dlt.MemberAttr(f"T_{level}", f"{i}")
                 child_elements = self._add_member_in_tupleStruct_layer_elements(
@@ -344,7 +349,6 @@ class LibBuilder:
         tensor_vars: TupleStruct[TensorVariable],
         ptr_type: dlt.PtrType = None,
         members: set[dlt.MemberAttr] = None,
-        level=0,
     ):
         assert tensor_vars not in self.tensor_var_details
         if members is None:
@@ -384,12 +388,14 @@ class LibBuilder:
                     ptr_id,
                 )
             self.tensor_var_details[tensor_vars] = ptr_type
+            common_member_name = set.intersection(*[{m.structName.data for m in elem.member_specifiers} for elem in ptr_type.contents_type.elements])
+            assert len(common_member_name) == 1
+            common_member_name = common_member_name.pop()
             for i, child in enumerate(tensor_vars):
                 self._set_dlt_type_for_tensor_var(
                     child,
                     ptr_type,
-                    members.union({dlt.MemberAttr(f"T_{level}", f"{i}")}),
-                    level=level + 1,
+                    members.union({dlt.MemberAttr(common_member_name, f"{i}")}),
                 )
         else:
             tensor_var = typing.cast(TensorVariable, tensor_vars)
@@ -943,21 +949,31 @@ class LibBuilder:
         self,
         module: ModuleOp,
         function_types: dict[builtin.StringAttr, func.FunctionType],
+        llvm_out: str = None,
         verbose=2,
     ) -> DTLCLib:
 
         lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
 
         if verbose > 0:
-            print(f"libary name: {lib_name}")
-        compilec.compile(module, lib_name, verbose=verbose)
+            print(f"library name: {lib_name}")
+        compilec.mlir_compile(module, lib_name, llvm_out=llvm_out, verbose=verbose)
         function_types = {name.data: v for name, v in function_types.items()}
 
         return DTLCLib(lib_name, self.func_map, function_types)
 
-    def build(self):
+    def compile_from(self, llvm_path: str, function_types: dict[builtin.StringAttr, func.FunctionType], verbose = 2):
+        lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
+        if verbose > 0:
+            print(f"library name: {lib_name}")
+        compilec.clang_compile(llvm_path, lib_name, verbose=verbose)
+        function_types = {name.data: v for name, v in function_types.items()}
 
-        module, layout_graph, iteration_map = self.prepare()
+        return DTLCLib(lib_name, self.func_map, function_types)
+
+    def build(self, verbose: int = 0):
+
+        module, layout_graph, iteration_map = self.prepare(verbose)
 
         iteration_generator = IterationGenerator(iteration_map)
         # new_iter_maps = iteration_generator.generate_mappings()
@@ -1004,8 +1020,8 @@ class LibBuilder:
             id: _make_nested_order(order) for id, order in new_order_map.items()
         }
 
-        function_types = self.lower(module, layout_graph, new_type_map, iteration_map, new_orders)
-        return self.compile(module, function_types)
+        function_types = self.lower(module, layout_graph, new_type_map, iteration_map, new_orders, verbose=verbose)
+        return self.compile(module, function_types, verbose=verbose)
 
 
 """

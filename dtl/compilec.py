@@ -20,17 +20,18 @@ def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None
 
     if verbose > 1:
         print("mlir output:")
-    res = StringIO()
-    printer = Printer(print_generic_format=False, stream=res)
+    xdsl_module = StringIO()
+    printer = Printer(print_generic_format=False, stream=xdsl_module)
     printer.print(module)
     if verbose > 1:
-        print(res.getvalue())
+        print(xdsl_module.getvalue())
 
-    fd, path = tempfile.mkstemp()
-    if verbose > 0:
-        print(f"Making tmp mlir - IR file: {path}")
-    with os.fdopen(fd, 'wb') as tmp:
-        tmp.write(res.getvalue().encode('utf8'))
+
+    # mlir_tmp_fd, mlir_tmp_path = tempfile.mkstemp()
+    # if verbose > 0:
+    #     print(f"Making tmp mlir - IR file: {mlir_tmp_path}")
+    # with os.fdopen(mlir_tmp_fd, 'wb') as mlir_tmp:
+    #     mlir_tmp.write(xdsl_module.getvalue().encode('utf8'))
 
 
     if verbose > 1:
@@ -52,42 +53,44 @@ def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None
         print("command:")
         print(' '.join(['mlir-opt'] + passes))
     process_opt = subprocess.Popen(['mlir-opt'] + passes, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    out, err = process_opt.communicate(res.getvalue().encode('utf8'))
+    mlir_opt_out, err = process_opt.communicate(xdsl_module.getvalue().encode('utf8'))
     process_opt.wait()
     if verbose > 1:
         print("stdout:")
-        print(out.decode('utf8'))
+        print(mlir_opt_out.decode('utf8'))
         print("stderr:")
         print(err.decode('utf8') if err is not None else None)
 
     if verbose > 1:
         print("mlir-translate")
     process_translate = subprocess.Popen(['mlir-translate', '--mlir-to-llvmir'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    out, err = process_translate.communicate(out)
+    mlir_translate_out, err = process_translate.communicate(mlir_opt_out)
     process_translate.wait()
     if verbose > 1:
         print("stdout:")
-        print(out.decode('utf8'))
+        print(mlir_translate_out.decode('utf8'))
         print("stderr:")
         print(err.decode('utf8') if err is not None else None)
 
     if llvm_out is None:
-        fd, path = tempfile.mkstemp(suffix=".ll")
+        llvm_tmp_fd, llvm_out = tempfile.mkstemp(suffix=".ll")
+        if verbose > 0:
+            print(f"Making tmp llvm-IR file: {llvm_out}")
+        try:
+            with os.fdopen(llvm_tmp_fd, 'wb') as llvm_tmp:
+                llvm_tmp.write(mlir_translate_out)
+                llvm_tmp.flush()
+            clang_compile(llvm_out, lib_output, verbose)
+        finally:
+            os.remove(llvm_out)
     else:
-        fd = open(llvm_out, "wb")
-        path = llvm_out
-
-    if verbose > 0:
-        print(f"Making tmp llvm-IR file: {path}")
-    try:
-        with os.fdopen(fd, 'wb') as tmp:
-            tmp.write(out)
-            tmp.flush()
-
-        clang_compile(path, lib_output, verbose)
-    finally:
-        # os.remove(path)
-        pass
+        if verbose > 0:
+            print(f"Making llvm-IR file: {llvm_out}")
+        os.makedirs(os.path.dirname(llvm_out), exist_ok=True)
+        with open(llvm_out, "wb") as llvm_fd:
+            llvm_fd.write(mlir_translate_out)
+            llvm_fd.flush()
+        clang_compile(llvm_out, lib_output, verbose)
 
     if verbose > 0:
         print("Done compiling with mlir / clang")

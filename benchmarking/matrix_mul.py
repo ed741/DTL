@@ -15,12 +15,14 @@ _Args = tuple[Any, StructType, StructType, StructType]
 
 
 class MatMul(Benchmark, abc.ABC):
-    def __init__(self, i: int, j: int, k: int, seed: int, base_dir: str, name: str, runs: int, repeats: int, epsilon: float):
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, epsilon: float):
+        var_name = "scope" if use_scope_vars else "static"
         new_base_dir = f"{base_dir}/matmul"
-        results_base_dir = f"{new_base_dir}/{name}_{i}.{j}.{k}_{seed}_{runs}"
+        results_base_dir = f"{new_base_dir}/{name}_{var_name}_{i}.{j}.{k}_{seed}_{runs}"
 
         self.i, self.j, self.k = i, j, k
         self.seed = seed
+        self.use_scope_vars = use_scope_vars
         super().__init__(results_base_dir, f"{new_base_dir}/layouts", f"{new_base_dir}/orders", runs, repeats, epsilon)
 
         # print("initing np a & b")
@@ -55,9 +57,16 @@ class MatMul(Benchmark, abc.ABC):
         raise NotImplementedError
 
     def define_lib_builder(self) -> LibBuilder:
-        vi = UnknownSizeVectorSpace("vi")
-        vj = UnknownSizeVectorSpace("vj")
-        vk = UnknownSizeVectorSpace("vk")
+        if self.use_scope_vars:
+            vi = UnknownSizeVectorSpace("vi")
+            vj = UnknownSizeVectorSpace("vj")
+            vk = UnknownSizeVectorSpace("vk")
+            scope_var_map = {vi: self.i, vj: self.j, vk: self.k}
+        else:
+            vi = RealVectorSpace(self.i)
+            vj = RealVectorSpace(self.j)
+            vk = RealVectorSpace(self.k)
+            scope_var_map = {}
         A = TensorVariable(vi * vj, "A")
         B = TensorVariable(vj * vk, "B")
         C = TensorVariable(vi * vk, "C")
@@ -67,7 +76,8 @@ class MatMul(Benchmark, abc.ABC):
         _k = Index('k')
         matmul = (A[_i, _j] * B[_j, _k]).sum(_j).forall(_i, _k)
 
-        lib_builder = LibBuilder({vi: self.i, vj: self.j, vk: self.k})
+
+        lib_builder = LibBuilder(scope_var_map)
         self.construct_lib_builder(lib_builder, A, B, C)
 
         lib_builder.make_setter("set_A", (A), {}, [0, 1])
@@ -130,9 +140,9 @@ class MatMul(Benchmark, abc.ABC):
 
 class StaticTriple(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
-        name = "static_triple"
-        super().__init__(i, j, k, seed, base_dir, name, runs, repeats, epsilon)
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
+        name = "triple"
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, epsilon)
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
         lib_builder.make_init("init", (a, b, c), [], free_name="dealloc")
@@ -149,9 +159,9 @@ class StaticTriple(MatMul):
 
 class StaticPair(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
-        name = "static_pair"
-        super().__init__(i, j, k, seed, base_dir, name, runs, repeats, epsilon)
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
+        name = "pair"
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, epsilon)
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
         lib_builder.make_init("init_AB", (a, b), [], free_name="dealloc_AB")
@@ -170,9 +180,9 @@ class StaticPair(MatMul):
 
 class StaticSingles(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
-        name = "static_singles"
-        super().__init__(i, j, k, seed, base_dir, name, runs, repeats, epsilon)
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
+        name = "singles"
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, epsilon)
 
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
@@ -195,15 +205,23 @@ class StaticSingles(MatMul):
 
 if __name__ == '__main__':
     
-    repeats = 3
+    repeats = 5
     runs = 10
     benchmarks = []
-    benchmarks.append(StaticTriple(128,128,128, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(128, 128, 128, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(128, 128, 128, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticTriple(8, 8, 8, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(8, 8, 8, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(8, 8, 8, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    # benchmarks.append(StaticTriple(128,128,128,True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    # benchmarks.append(StaticTriple(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+
+    # benchmarks.append(StaticTriple(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    # benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+
     for benchmark in benchmarks:
         benchmark.skip_testing = True
         benchmark.only_compile_to_llvm = True

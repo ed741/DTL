@@ -7,7 +7,7 @@ from xdsl.dialects import builtin
 from xdsl.printer import Printer
 
 
-def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None, verbose = 2):
+def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None, llvm_only: bool = False, verbose = 2):
     # if header_out==None:
     #     header_out = lib_output.removesuffix(".o") + ".h"
 
@@ -80,7 +80,8 @@ def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None
             with os.fdopen(llvm_tmp_fd, 'wb') as llvm_tmp:
                 llvm_tmp.write(mlir_translate_out)
                 llvm_tmp.flush()
-            clang_compile(llvm_out, lib_output, verbose)
+            if not llvm_only:
+                clang_compile(llvm_out, lib_output, verbose)
         finally:
             os.remove(llvm_out)
     else:
@@ -90,7 +91,8 @@ def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None
         with open(llvm_out, "wb") as llvm_fd:
             llvm_fd.write(mlir_translate_out)
             llvm_fd.flush()
-        clang_compile(llvm_out, lib_output, verbose)
+        if not llvm_only:
+            clang_compile(llvm_out, lib_output, verbose)
 
     if verbose > 0:
         print("Done compiling with mlir / clang")

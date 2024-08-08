@@ -24,6 +24,15 @@ class Benchmark(abc.ABC):
         self.runs = runs
         self.repeats = repeats
         self.epsilon = epsilon
+
+        self._lib_store: dict[tuple[int, int], DTLCLib] = {}
+
+        self.take_first_layouts = 0
+        self.take_first_orders = 0
+        self.do_not_generate = False
+        self.only_generate = False
+        self.do_not_compile_mlir = False
+        self.only_compile_to_llvm = False
         self.skip_testing = False
 
     @abc.abstractmethod
@@ -53,11 +62,45 @@ class Benchmark(abc.ABC):
         print(f"{datetime.datetime.now()} Starting benchmarking...")
         self.run_benchmarking(lib_builder)
 
+    def get_compiled_lib(self, new_layout: PtrMapping, new_order: IterationMapping, module: ModuleOp, lib_builder: LibBuilder, layout_graph: LayoutGraph, iteration_map: IterationMap) -> DTLCLib | None:
+        if (key := (new_layout.number, new_order.number)) in self._lib_store:
+            return self._lib_store[key]
+
+        lib = None
+        lib_name = f"lib_{new_layout.number}_{new_order.number}"
+        llvm_path = f"{self.base_dir}/llvm/{lib_name}.ll"
+        print(f"Getting compiled library for: layout={new_layout.number}, iter_order={new_order.number}")
+        module_clone = module.clone()
+        function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
+                                           iteration_map,
+                                           new_order.make_iter_dict(), verbose=0)
+        if os.path.exists(llvm_path):
+            print(f"Found existing LLVM file for: layout={new_layout.number}, iter_order={new_order.number}")
+            if not self.only_compile_to_llvm:
+                lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
+                print(f"LLVM file compiled to {lib._library_path}")
+        elif self.do_not_compile_mlir:
+            print("Do not compile mlir is set, but no llvm ir file was found")
+        else:
+            lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path,
+                                          llvm_only=self.only_compile_to_llvm, verbose=0)
+            if lib is not None:
+                print(f"Compiled to LLVM: {llvm_path} and then to library: {lib._library_path}")
+            else:
+                print(f"Compiled to LLVM: {llvm_path} and but no library was produced.")
+
+        if lib is not None:
+            self._lib_store[key] = lib
+        return lib
+
     def run_benchmarking(self, lib_builder: LibBuilder) -> None:
         module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
 
         print(f"{datetime.datetime.now()} Generating possible layouts and iteration maps")
         layouts, orders = self._generate_versions(layout_graph, iteration_map)
+        if self.only_generate:
+            print("Only Generate is set, so benchmarking is ending.")
+            return
 
         print(f"{datetime.datetime.now()} Loading from existing results")
         results_done = set()
@@ -73,27 +116,21 @@ class Benchmark(abc.ABC):
                     results_done.add((int(layout_num), int(order_num), int(rep)))
         print(f"{datetime.datetime.now()} Found {len(results_done)} results")
 
-        duplicates: dict[str, tuple[int, int]] = {}
-        duplicates_file = f"{self.base_dir}/duplicate_tests.csv"
+
 
         write_results_header = not os.path.exists(results_file)
-        write_duplicates_header = not os.path.exists(duplicates_file)
-        with open(results_file, "a", newline="") as csv_results, open(duplicates_file, "a",
-                                                                      newline="") as csv_duplicates:
+
+        with open(results_file, "a", newline="") as csv_results:
             result_writer = csv.writer(csv_results)
             if write_results_header:
                 result_writer.writerow(
                     ["layout_mapping", "iter_mapping", "rep", "time", "within_epsilon", "per_run_error",
                      "bit_repeatable"])
 
-            duplicates_writer = csv.writer(csv_duplicates)
-            if write_duplicates_header:
-                duplicates_writer.writerow(
-                    ["layout_num", "order_num", "duplicate of", "base_layout_num", "base_order_num"])
-
             for new_layout in layouts:
                 for new_order in orders:
-                    lib = None
+                    print(f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}")
+                    lib = self.get_compiled_lib(new_layout, new_order, module, lib_builder, layout_graph, iteration_map)
                     results = []
                     results_correct = True
                     for rep in range(self.repeats):
@@ -103,38 +140,15 @@ class Benchmark(abc.ABC):
                                 f"Skipping layout: {new_layout.number}, order: {new_order.number}, rep: {rep} as it is already in the results file")
                             continue
 
-                        if lib is None:
-                            lib_name = f"lib_{new_layout.number}_{new_order.number}"
-                            llvm_path = f"{self.base_dir}/llvm/{lib_name}.ll"
-                            print(f"Compiling:  layout={new_layout.number}, iter_order={new_order.number}")
-                            module_clone = module.clone()
-                            function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
-                                                               iteration_map,
-                                                               new_order.make_iter_dict(), verbose=0)
-                            module_str = self._print_to_str(module_clone)
-                            if module_str in duplicates:
-                                base_layout_num, base_order_num = duplicates[module_str]
-                                print(
-                                    f"Skipping layout: {new_layout.number}, order: {new_order.number}, rep: {rep} as it compiled to a duplicate of layout: {base_order_num}, order: {base_order_num}")
-                                duplicates_writer.writerow(
-                                    [new_layout.number, new_order.number, "is dup of", base_layout_num, base_order_num])
-                                csv_duplicates.flush()
-                                break
-                            else:
-                                duplicates[module_str] = (new_layout.number, new_order.number)
-
-                            if os.path.exists(llvm_path):
-                                print(f"Found existing LLVM file for layout={new_layout.number}, iter_order={new_order.number}")
-                                lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
-                            else:
-                                lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path, verbose=0)
 
                         print(
-                            f"{datetime.datetime.now()} Running benchmark :: layout: {new_layout.number}, order: {new_order.number}, rep: {rep} ",
+                            f"{datetime.datetime.now()} Running benchmark repeat :: rep: {rep} ",
                             end="")
 
                         if self.skip_testing:
                             print(f"Skipping testing")
+                        elif lib is None:
+                            print(f"Cannot test because lib is none")
                         else:
                             result, epsilon_correct, error_per_run, bit_repeatable = self._run_benchmark(lib)
                             result_writer.writerow(
@@ -212,7 +226,7 @@ class Benchmark(abc.ABC):
 
         return result, total_within_epsilon, mean_error, total_bitwise_consistent
 
-    def _generate_versions(self, layout_graph: LayoutGraph, iteration_map: IterationMap):
+    def _generate_versions(self, layout_graph: LayoutGraph, iteration_map: IterationMap) -> tuple[list[PtrMapping], list[IterationMapping]]:
 
         layouts_pickle_file = f"{self.base_dir}/layouts/layouts.pickle"
 
@@ -226,9 +240,9 @@ class Benchmark(abc.ABC):
             else:
                 print("pickle loaded but layout graph does not match")
 
-        if new_layouts is None:
+        if new_layouts is None and not self.do_not_generate:
             print("Generating layouts")
-            new_layouts = LayoutGenerator(layout_graph, plot_dir=f"{self.base_dir}/layouts/").generate_mappings(take_first=0)
+            new_layouts = LayoutGenerator(layout_graph, plot_dir=f"{self.base_dir}/layouts/").generate_mappings(take_first=self.take_first_layouts)
             print("Writing new layouts to pickle")
             open(layouts_pickle_file, "wb").write(pickle.dumps((layout_graph, new_layouts)))
 
@@ -244,12 +258,19 @@ class Benchmark(abc.ABC):
             else:
                 print("pickle loaded but iteration map does not match")
 
-        if new_orders is None:
+        if new_orders is None and not self.do_not_generate:
             print("Generating orders")
             new_orders = IterationGenerator(iteration_map, plot_dir=f"{self.base_dir}/iter_orders/").generate_mappings(
-                take_first=0)
+                take_first=self.take_first_orders)
             print("Writing new orders to pickle")
             open(orders_pickle_file, "wb").write(pickle.dumps((iteration_map, new_orders)))
+
+        if new_layouts is None:
+            print("new_layouts is none! Probably because do_not_generate is set")
+            new_layouts = []
+        if new_orders is None:
+            print("new_orders is none! Probably because do_not_generate is set")
+            new_orders = []
 
         new_layouts = list(new_layouts)
         new_orders = list(new_orders)

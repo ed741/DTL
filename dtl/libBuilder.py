@@ -950,19 +950,22 @@ class LibBuilder:
         module: ModuleOp,
         function_types: dict[builtin.StringAttr, func.FunctionType],
         llvm_out: str = None,
+        llvm_only: bool = False,
         verbose=2,
-    ) -> DTLCLib:
+    ) -> DTLCLib | None:
 
         lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
 
         if verbose > 0:
             print(f"library name: {lib_name}")
-        compilec.mlir_compile(module, lib_name, llvm_out=llvm_out, verbose=verbose)
+        compilec.mlir_compile(module, lib_name, llvm_out=llvm_out, llvm_only=llvm_only, verbose=verbose)
+        if llvm_only:
+            return None
         function_types = {name.data: v for name, v in function_types.items()}
 
         return DTLCLib(lib_name, self.func_map, function_types)
 
-    def compile_from(self, llvm_path: str, function_types: dict[builtin.StringAttr, func.FunctionType], verbose = 2):
+    def compile_from(self, llvm_path: str, function_types: dict[builtin.StringAttr, func.FunctionType], verbose = 2) -> DTLCLib:
         lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
         if verbose > 0:
             print(f"library name: {lib_name}")

@@ -207,8 +207,8 @@ if __name__ == '__main__':
     for benchmark in benchmarks:
         benchmark.skip_testing = True
         benchmark.only_compile_to_llvm = True
-        benchmark.take_first_layouts = 5
-        benchmark.take_first_orders = 5
+        # benchmark.take_first_layouts = 5
+        # benchmark.take_first_orders = 5
         benchmark.run()
         benchmark.skip_testing = False
         benchmark.only_compile_to_llvm = False

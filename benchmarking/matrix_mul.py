@@ -1,11 +1,3 @@
-# import xdsl.dialects.arith
-import csv
-import ctypes
-import os
-import pickle
-import time
-import timeit
-from io import StringIO
 from random import Random
 
 import numpy as np
@@ -13,19 +5,9 @@ import numpy as np
 from benchmarking.benchmark import Benchmark
 from dtl import *
 from dtl.dag import RealVectorSpace, Index
-import dtlpp.backends.xdsl as xdtl
 
 from dtl.libBuilder import DTLCLib, LibBuilder, StructType
-from dtlpp.backends import native
-from xdsl.dialects import arith, scf, func
-from xdsl.dialects.builtin import ModuleOp, f32, IntegerAttr, IntegerType
-from xdsl.dialects.experimental import dlt
-from xdsl.ir import Block, Region
-from xdsl.printer import Printer
-from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import IterationGenerator
-from xdsl.transforms.experimental.dlt.generate_dlt_layouts import LayoutGenerator
-from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
-from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
+
 
 _Epsilon = 0.00001
 
@@ -34,10 +16,12 @@ _Args = tuple[Any, StructType, StructType, StructType]
 
 class MatMul(Benchmark, abc.ABC):
     def __init__(self, i: int, j: int, k: int, seed: int, base_dir: str, name: str, runs: int, repeats: int, epsilon: float):
-        base_dir = f"{base_dir}/matmul_{name}_{i}.{j}.{k}_{seed}_{runs}"
+        new_base_dir = f"{base_dir}/matmul"
+        results_base_dir = f"{new_base_dir}/{name}_{i}.{j}.{k}_{seed}_{runs}"
+
         self.i, self.j, self.k = i, j, k
         self.seed = seed
-        super().__init__(base_dir, runs, repeats, epsilon)
+        super().__init__(results_base_dir, f"{new_base_dir}/layouts", f"{new_base_dir}/orders", runs, repeats, epsilon)
 
         # print("initing np a & b")
         np_a = np.zeros((i, j), dtype=np.float32)
@@ -60,6 +44,10 @@ class MatMul(Benchmark, abc.ABC):
         self.np_a = np_a
         self.np_b = np_b
         self.np_c = np_c
+
+        self.handle_reference_array(np_a, "np_a")
+        self.handle_reference_array(np_b, "np_b")
+        self.handle_reference_array(np_c, "np_c")
 
 
     @abc.abstractmethod
@@ -206,22 +194,26 @@ class StaticSingles(MatMul):
 
 
 if __name__ == '__main__':
-    static_benchmark = StaticTriple(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    # static_benchmark.skip_testing = True
-    static_benchmark.run()
-    static_benchmark = StaticPair(128,128,128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    # static_benchmark.skip_testing = True
-    static_benchmark.run()
-    static_benchmark = StaticSingles(128, 128, 128, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    # static_benchmark.skip_testing = True
-    static_benchmark.run()
+    
+    repeats = 3
+    runs = 10
+    benchmarks = []
+    benchmarks.append(StaticTriple(128,128,128, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(128, 128, 128, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(128, 128, 128, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticTriple(8, 8, 8, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(8, 8, 8, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(8, 8, 8, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    for benchmark in benchmarks:
+        benchmark.skip_testing = True
+        benchmark.only_compile_to_llvm = True
+        benchmark.take_first_layouts = 5
+        benchmark.take_first_orders = 5
+        benchmark.run()
+        benchmark.skip_testing = False
+        benchmark.only_compile_to_llvm = False
 
-    static_benchmark = StaticTriple(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    # static_benchmark.skip_testing = True
-    static_benchmark.run()
-    static_benchmark = StaticPair(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    # static_benchmark.skip_testing = True
-    static_benchmark.run()
-    static_benchmark = StaticSingles(8, 8, 8, 0, "./results", repeats=10, runs=10, epsilon=_Epsilon)
-    # static_benchmark.skip_testing = True
-    static_benchmark.run()
+    for benchmark in benchmarks:
+        benchmark.run()
+
+

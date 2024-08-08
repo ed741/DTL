@@ -7,6 +7,9 @@ import timeit
 import typing
 from io import StringIO
 
+import nptyping
+import numpy as np
+
 from dtl.libBuilder import DTLCLib, LibBuilder
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.printer import Printer
@@ -19,11 +22,14 @@ _T = typing.TypeVar('_T', bound=tuple["_CData", ...])
 
 class Benchmark(abc.ABC):
 
-    def __init__(self, base_dir: str, runs: int, repeats: int, epsilon: float):
+    def __init__(self, base_dir: str, layout_store: str, order_store: str, runs: int, repeats: int, epsilon: float):
         self.base_dir = base_dir
         self.runs = runs
         self.repeats = repeats
         self.epsilon = epsilon
+
+        self.layout_store = layout_store
+        self.order_store = order_store
 
         self._lib_store: dict[tuple[int, int], DTLCLib] = {}
 
@@ -34,6 +40,21 @@ class Benchmark(abc.ABC):
         self.do_not_compile_mlir = False
         self.only_compile_to_llvm = False
         self.skip_testing = False
+
+        os.makedirs(self.base_dir, exist_ok=True)
+
+    def handle_reference_array(self, array: nptyping.NDArray, name: str):
+        path = f"{self.base_dir}/{name}"
+        if os.path.exists(path):
+            loaded_array = np.loadtxt(path)
+            if not np.equal(array, loaded_array).all():
+                print(f"ERROR! loaded array does not match newly calculated reference array: {path}")
+            else:
+                # print(f"Reference array consistent with {path}")
+                pass
+        else:
+            np.savetxt(path, array)
+            print(f"Reference array saved to {path}")
 
     @abc.abstractmethod
     def define_lib_builder(self) -> LibBuilder:
@@ -69,16 +90,18 @@ class Benchmark(abc.ABC):
         lib = None
         lib_name = f"lib_{new_layout.number}_{new_order.number}"
         llvm_path = f"{self.base_dir}/llvm/{lib_name}.ll"
-        print(f"Getting compiled library for: layout={new_layout.number}, iter_order={new_order.number}")
+        print(f"Getting compiled library for: layout={new_layout.number}, iter_order={new_order.number}: ", end="")
         module_clone = module.clone()
         function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
                                            iteration_map,
                                            new_order.make_iter_dict(), verbose=0)
         if os.path.exists(llvm_path):
-            print(f"Found existing LLVM file for: layout={new_layout.number}, iter_order={new_order.number}")
+            print(f"Found existing LLVM file, ", end="")
             if not self.only_compile_to_llvm:
                 lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
                 print(f"LLVM file compiled to {lib._library_path}")
+            else:
+                print("Skipping LLVM compilation")
         elif self.do_not_compile_mlir:
             print("Do not compile mlir is set, but no llvm ir file was found")
         else:
@@ -130,7 +153,6 @@ class Benchmark(abc.ABC):
             for new_layout in layouts:
                 for new_order in orders:
                     print(f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}")
-                    lib = self.get_compiled_lib(new_layout, new_order, module, lib_builder, layout_graph, iteration_map)
                     results = []
                     results_correct = True
                     for rep in range(self.repeats):
@@ -139,10 +161,11 @@ class Benchmark(abc.ABC):
                             print(
                                 f"Skipping layout: {new_layout.number}, order: {new_order.number}, rep: {rep} as it is already in the results file")
                             continue
-
+                        lib = self.get_compiled_lib(new_layout, new_order, module, lib_builder, layout_graph,
+                                                    iteration_map)
 
                         print(
-                            f"{datetime.datetime.now()} Running benchmark repeat :: rep: {rep} ",
+                            f"{datetime.datetime.now()} Running benchmark repeat :: l: {new_layout.number}, o: {new_order.number}, rep: {rep} ",
                             end="")
 
                         if self.skip_testing:
@@ -228,52 +251,83 @@ class Benchmark(abc.ABC):
 
     def _generate_versions(self, layout_graph: LayoutGraph, iteration_map: IterationMap) -> tuple[list[PtrMapping], list[IterationMapping]]:
 
-        layouts_pickle_file = f"{self.base_dir}/layouts/layouts.pickle"
+        layout_store_keys = f"{self.layout_store}/keys"
+        os.makedirs(layout_store_keys, exist_ok=True)
+        layout_store_values = f"{self.layout_store}/values"
+        os.makedirs(layout_store_values, exist_ok=True)
 
-        new_layouts = None
-        if os.path.exists(layouts_pickle_file):
-            print("loading layouts from pickle")
-            loaded_layout_graph, loaded_layouts = pickle.load(open(layouts_pickle_file, "rb"))
+        loaded_layouts = None
+        max_key = -1
+        count = 0
+        for file in os.listdir(layout_store_keys):
+            print(".", end="")
+            count += 1
+
+            key = os.fsdecode(file)
+            key_int = int(key)
+            max_key = max(max_key, key_int)
+            with open(f"{layout_store_keys}/{key}", "rb") as f:
+                loaded_layout_graph = pickle.load(f)
+
             if layout_graph.matches(loaded_layout_graph):
-                print("pickle layouts graph matches")
-                new_layouts = loaded_layouts
-            else:
-                print("pickle loaded but layout graph does not match")
-
-        if new_layouts is None and not self.do_not_generate:
-            print("Generating layouts")
-            new_layouts = LayoutGenerator(layout_graph, plot_dir=f"{self.base_dir}/layouts/").generate_mappings(take_first=self.take_first_layouts)
+                print(f"{'\b'*count}Found matching layout graph in layout store: {key_int}")
+                with open(f"{layout_store_values}/{key}", "rb") as f:
+                    loaded_layouts = pickle.load(f)
+                break
+        if loaded_layouts is None and not self.do_not_generate:
+            new_key = max_key + 1
+            print("\b"*count, end="")
+            print(f"No matching layout graph found after checking {count} graphs. Generating from scratch as {new_key}")
+            new_layouts = LayoutGenerator(layout_graph, plot_dir=f"{self.layout_store}/gen/{new_key}").generate_mappings(
+                take_first=self.take_first_layouts)
             print("Writing new layouts to pickle")
-            open(layouts_pickle_file, "wb").write(pickle.dumps((layout_graph, new_layouts)))
+            with open(f"{layout_store_values}/{new_key}", "wb") as f: f.write(pickle.dumps(new_layouts))
+            with open(f"{layout_store_keys}/{new_key}", "wb") as f: f.write(pickle.dumps(layout_graph))
+            loaded_layouts = new_layouts
 
-        orders_pickle_file = f"{self.base_dir}/iter_orders/orders.pickle"
+        order_store_keys = f"{self.order_store}/keys"
+        os.makedirs(order_store_keys, exist_ok=True)
+        order_store_values = f"{self.order_store}/values"
+        os.makedirs(order_store_values, exist_ok=True)
 
-        new_orders = None
-        if os.path.exists(orders_pickle_file):
-            print("loading orders from pickle")
-            loaded_iteration_map, loaded_orders = pickle.load(open(orders_pickle_file, "rb"))
+        loaded_orders = None
+        max_key = -1
+        count = 0
+        for file in os.listdir(order_store_keys):
+            print(".", end="")
+            count += 1
+
+            key = os.fsdecode(file)
+            key_int = int(key)
+            max_key = max(max_key, key_int)
+            with open(f"{order_store_keys}/{key}", "rb") as f:
+                loaded_iteration_map = pickle.load(f)
+
             if iteration_map.matches(loaded_iteration_map):
-                print("pickle orders map matches")
-                new_orders = loaded_orders
-            else:
-                print("pickle loaded but iteration map does not match")
-
-        if new_orders is None and not self.do_not_generate:
-            print("Generating orders")
-            new_orders = IterationGenerator(iteration_map, plot_dir=f"{self.base_dir}/iter_orders/").generate_mappings(
+                print(f"{'\b' * count}Found matching iteration map in order store: {key_int}")
+                with open(f"{order_store_values}/{key}", "rb") as f:
+                    loaded_orders = pickle.load(f)
+                break
+        if loaded_orders is None and not self.do_not_generate:
+            new_key = max_key + 1
+            print("\b" * count, end="")
+            print(f"No matching iteration map found after checking {count} maps. Generating from scratch as {new_key}")
+            new_orders = IterationGenerator(iteration_map, plot_dir=f"{self.order_store}/gen/{new_key}").generate_mappings(
                 take_first=self.take_first_orders)
             print("Writing new orders to pickle")
-            open(orders_pickle_file, "wb").write(pickle.dumps((iteration_map, new_orders)))
+            with open(f"{order_store_values}/{new_key}", "wb") as f: f.write(pickle.dumps(new_orders))
+            with open(f"{order_store_keys}/{new_key}", "wb") as f: f.write(pickle.dumps(iteration_map))
+            loaded_orders = new_orders
 
-        if new_layouts is None:
-            print("new_layouts is none! Probably because do_not_generate is set")
-            new_layouts = []
-        if new_orders is None:
-            print("new_orders is none! Probably because do_not_generate is set")
-            new_orders = []
+        if loaded_layouts is None:
+            print("loaded_layouts is none! Probably because do_not_generate is set")
+            loaded_layouts = []
+        if loaded_orders is None:
+            print("loaded_orders is none! Probably because do_not_generate is set")
+            loaded_orders = []
 
-        new_layouts = list(new_layouts)
-        new_orders = list(new_orders)
+        new_layouts = list(loaded_layouts)
+        new_orders = list(loaded_orders)
         return new_layouts, new_orders
 
     @staticmethod

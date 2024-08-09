@@ -118,7 +118,7 @@ class Benchmark(abc.ABC):
                     self._lib_store[key] = lib
                     return lib
                 else:
-                    print(f"Compiled to LLVM: {llvm_path} and but no library was produced.")
+                    print(f"Compiled to LLVM: {llvm_path} but no library was produced.")
                     return None
 
         if os.path.exists(llvm_path):

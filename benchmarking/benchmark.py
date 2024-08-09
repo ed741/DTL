@@ -121,36 +121,6 @@ class Benchmark(abc.ABC):
                     print(f"Compiled to LLVM: {llvm_path} but no library was produced.")
                     return None
 
-        if os.path.exists(llvm_path):
-            print(f"Found existing LLVM file, ", end="")
-            if not self.only_compile_to_llvm:
-                module_clone = module.clone()
-                function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
-                                                   iteration_map,
-                                                   new_order.make_iter_dict(), verbose=0)
-                lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
-                print(f"LLVM file compiled to {lib._library_path}")
-            else:
-                print("Skipping LLVM compilation")
-                return None
-        elif self.do_not_compile_mlir:
-            print("Do not compile mlir is set, but no llvm ir file was found")
-        else:
-            module_clone = module.clone()
-            function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
-                                               iteration_map,
-                                               new_order.make_iter_dict(), verbose=0)
-            lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path,
-                                          llvm_only=self.only_compile_to_llvm, verbose=0)
-            if lib is not None:
-                print(f"Compiled to LLVM: {llvm_path} and then to library: {lib._library_path}")
-            else:
-                print(f"Compiled to LLVM: {llvm_path} and but no library was produced.")
-
-        if lib is not None:
-            self._lib_store[key] = lib
-        return lib
-
     def close_compiled_lib(self, lib):
         keys = []
         for k, value in self._lib_store.items():

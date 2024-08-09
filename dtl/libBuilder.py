@@ -961,28 +961,31 @@ class LibBuilder:
         function_types: dict[builtin.StringAttr, func.FunctionType],
         llvm_out: str = None,
         llvm_only: bool = False,
+        lib_path: str = None,
         verbose=2,
     ) -> DTLCLib | None:
-
-        lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
-        os.close(lib_fd)
+        if lib_path is None:
+            lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
+            os.close(lib_fd)
+            lib_path = lib_name
         if verbose > 0:
-            print(f"library name: {lib_name}")
-        compilec.mlir_compile(module, lib_name, llvm_out=llvm_out, llvm_only=llvm_only, verbose=verbose)
+            print(f"library name: {lib_path}")
+        compilec.mlir_compile(module, lib_path, llvm_out=llvm_out, llvm_only=llvm_only, verbose=verbose)
         if llvm_only:
             return None
         function_types = {name.data: v for name, v in function_types.items()}
+        return DTLCLib(lib_path, self.func_map, function_types)
 
-        return DTLCLib(lib_name, self.func_map, function_types)
-
-    def compile_from(self, llvm_path: str, function_types: dict[builtin.StringAttr, func.FunctionType], verbose = 2) -> DTLCLib:
-        lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
-        os.close(lib_fd)
+    def compile_from(self, llvm_path: str, function_types: dict[builtin.StringAttr, func.FunctionType], lib_path: str = None, verbose = 2) -> DTLCLib:
+        if lib_path is None:
+            lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
+            os.close(lib_fd)
+            lib_path = lib_name
         if verbose > 0:
-            print(f"library name: {lib_name}")
-        compilec.clang_compile(llvm_path, lib_name, verbose=verbose)
+            print(f"library name: {lib_path}")
+        compilec.clang_compile(llvm_path, lib_path, verbose=verbose)
         function_types = {name.data: v for name, v in function_types.items()}
-        return DTLCLib(lib_name, self.func_map, function_types)
+        return DTLCLib(lib_path, self.func_map, function_types)
 
     def build(self, verbose: int = 0):
 

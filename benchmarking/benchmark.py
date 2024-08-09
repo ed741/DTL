@@ -37,6 +37,7 @@ class Benchmark(abc.ABC):
         self.take_first_orders = 0
         self.do_not_generate = False
         self.only_generate = False
+        self.do_not_lower = False
         self.do_not_compile_mlir = False
         self.only_compile_to_llvm = False
         self.skip_testing = False
@@ -87,38 +88,79 @@ class Benchmark(abc.ABC):
         if (key := (new_layout.number, new_order.number)) in self._lib_store:
             return self._lib_store[key]
 
-        lib = None
         lib_name = f"lib_{new_layout.number}_{new_order.number}"
         llvm_path = f"{self.base_dir}/llvm/{lib_name}.ll"
-        print(f"Getting compiled library for: layout: {new_layout.number}, iter_order: {new_order.number}: ", end="")
-        llvm_exists = os.path.exists(llvm_path)
+        os.makedirs(os.path.dirname(llvm_path), exist_ok=True)
+        lib_path = f"{self.base_dir}/libs/{lib_name}.so"
+        os.makedirs(os.path.dirname(lib_path), exist_ok=True)
+        func_types_path = f"{self.base_dir}/func_types/{lib_name}"
+        os.makedirs(os.path.dirname(func_types_path), exist_ok=True)
 
-        if llvm_exists and self.only_compile_to_llvm:
-            print(f"Found existing LLVM file and Skipping LLVM compilation")
-            return None
-        elif not llvm_exists and self.do_not_compile_mlir:
-            print("Do not compile mlir is set, but no llvm ir file was found")
-            return None
-        else:
+        print(f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: ", end="")
+
+        func_types_exists = os.path.exists(func_types_path)
+        print("func_types: ", end="")
+        if func_types_exists:
+            module_clone = None
+            with open(func_types_path, "rb") as f:
+                function_types = pickle.load(f)
+            print("loaded, ", end="")
+        elif not self.do_not_lower:
             module_clone = module.clone()
             function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
                                                iteration_map,
                                                new_order.make_iter_dict(), verbose=0)
+            with open(func_types_path, "wb") as f: f.write(pickle.dumps(function_types))
+            print("made, ", end="")
+        else:
+            print("not found, but do not lower is set")
+            return None
+
+        lib_exists = os.path.exists(lib_path)
+        print("lib: ", end="")
+        if lib_exists:
+            lib = DTLCLib(lib_path, lib_builder.func_map, function_types)
+            print("loaded.")
+            self._lib_store[key] = lib
+            return lib
+        else:
+            print("not found, ", end="")
+
+        llvm_exists = os.path.exists(llvm_path)
+        print("llvm: ", end="")
+        if llvm_exists and self.only_compile_to_llvm:
+            print(f"found & Done.")
+            return None
+        elif not llvm_exists and self.do_not_compile_mlir:
+            print("not found - but do not compile mlir is set.")
+            return None
+        else:
             if llvm_exists:
-                print(f"Found existing LLVM file, ",  end="")
-                lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
-                print(f"LLVM file compiled to {lib._library_path}")
+                print(f"found, ",  end="")
+                lib = lib_builder.compile_from(llvm_path, function_types, lib_path=lib_path, verbose=0)
+                print(f"lib compiled to: {lib_path}")
                 self._lib_store[key] = lib
                 return lib
             else:
+                print("not found, ", end="")
+                if module_clone is None:
+                    print("func_types: ", end="")
+                    module_clone = module.clone()
+                    function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
+                                                       iteration_map,
+                                                       new_order.make_iter_dict(), verbose=0)
+                    with open(func_types_path, "wb") as f: f.write(pickle.dumps(function_types))
+                    print("remade", end="")
+
+                print("lib: ", end="")
                 lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path,
-                                          llvm_only=self.only_compile_to_llvm, verbose=0)
+                                          llvm_only=self.only_compile_to_llvm, lib_path=lib_path, verbose=0)
                 if lib is not None:
-                    print(f"Compiled to LLVM: {llvm_path} and then to library: {lib._library_path}")
+                    print(f"compiled to binary. LLVM: {llvm_path}, lib: {lib._library_path}")
                     self._lib_store[key] = lib
                     return lib
                 else:
-                    print(f"Compiled to LLVM: {llvm_path} but no library was produced.")
+                    print(f"compiled to LLVM: {llvm_path} but no lib was produced.")
                     return None
 
     def close_compiled_lib(self, lib):
@@ -130,7 +172,6 @@ class Benchmark(abc.ABC):
             del self._lib_store[k]
         lib._close(delete=True)
         del lib
-
 
     def run_benchmarking(self, lib_builder: LibBuilder) -> None:
         module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
@@ -154,8 +195,6 @@ class Benchmark(abc.ABC):
                     rep = row[2]
                     results_done.add((int(layout_num), int(order_num), int(rep)))
         print(f"{datetime.datetime.now()} Found {len(results_done)} results")
-
-
 
         write_results_header = not os.path.exists(results_file)
 

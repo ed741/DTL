@@ -90,7 +90,7 @@ class Benchmark(abc.ABC):
         lib = None
         lib_name = f"lib_{new_layout.number}_{new_order.number}"
         llvm_path = f"{self.base_dir}/llvm/{lib_name}.ll"
-        print(f"Getting compiled library for: layout={new_layout.number}, iter_order={new_order.number}: ", end="")
+        print(f"Getting compiled library for: layout: {new_layout.number}, iter_order: {new_order.number}: ", end="")
         module_clone = module.clone()
         function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
                                            iteration_map,
@@ -115,6 +115,17 @@ class Benchmark(abc.ABC):
         if lib is not None:
             self._lib_store[key] = lib
         return lib
+
+    def close_compiled_lib(self, lib):
+        keys = []
+        for k, value in self._lib_store.items():
+            if value == lib:
+                keys.append(k)
+        for k in keys:
+            del self._lib_store[k]
+        lib._close(delete=True)
+        del lib
+
 
     def run_benchmarking(self, lib_builder: LibBuilder) -> None:
         module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
@@ -150,20 +161,24 @@ class Benchmark(abc.ABC):
                     ["layout_mapping", "iter_mapping", "rep", "time", "within_epsilon", "per_run_error",
                      "bit_repeatable"])
 
+            lib = None
             for new_layout in layouts:
                 for new_order in orders:
                     print(f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}")
                     results = []
                     results_correct = True
+                    if all((new_layout.number, new_order.number, rep) in results_done for rep in range(self.repeats)):
+                        print(f"{datetime.datetime.now()} Skipping layout: {new_layout.number}, order: {new_order.number} for all repeats [0..{self.repeats}) as they are already in the results file")
+                        continue
+
+                    lib = self.get_compiled_lib(new_layout, new_order, module, lib_builder, layout_graph,
+                                                iteration_map)
                     for rep in range(self.repeats):
                         test_id = (new_layout.number, new_order.number, rep)
                         if test_id in results_done:
                             print(
                                 f"Skipping layout: {new_layout.number}, order: {new_order.number}, rep: {rep} as it is already in the results file")
                             continue
-                        lib = self.get_compiled_lib(new_layout, new_order, module, lib_builder, layout_graph,
-                                                    iteration_map)
-
                         print(
                             f"{datetime.datetime.now()} Running benchmark repeat :: l: {new_layout.number}, o: {new_order.number}, rep: {rep} ",
                             end="")
@@ -182,7 +197,8 @@ class Benchmark(abc.ABC):
                             results_correct &= epsilon_correct
                             print(
                                 f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable}")
-
+            if lib is not None:
+                self.close_compiled_lib(lib)
         print("finished")
 
     def _run_benchmark(self, lib: DTLCLib):

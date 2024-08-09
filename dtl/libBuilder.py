@@ -1,10 +1,10 @@
 import ctypes
 import functools
+import os
 import tempfile
 import typing
 from ctypes import cdll
 from dataclasses import dataclass
-from typing import Tuple
 
 import dtl
 from dtl import (
@@ -16,10 +16,9 @@ from dtl import (
     Index,
 )
 from dtlpp.backends import xdsl as xdtl
-from scripts.visualiseDLT import IterationPlotter
 from xdsl import ir
 from xdsl.dialects import builtin, arith, printf, llvm, func
-from xdsl.dialects.builtin import FunctionType, f32, IndexType, ModuleOp, i64
+from xdsl.dialects.builtin import IndexType, ModuleOp, i64
 from xdsl.dialects.experimental import dlt
 from xdsl.dialects.func import Return, FuncOp
 from xdsl.ir import Attribute, Region, MLContext, TypeAttribute
@@ -123,6 +122,17 @@ class DTLCLib:
         self._lib = cdll.LoadLibrary(self._library_path)
         self._func_types = function_types  # describe funcs as original (with return vals) with llvm types
         self._ctype_classes: dict = {}
+
+        self._dlclose_func = ctypes.cdll.LoadLibrary('').dlclose
+        self._dlclose_func.argtypes = [ctypes.c_void_p]
+        self._handle = self._lib._handle
+
+    def _close(self, delete=False):
+        del self._lib
+        self._dlclose_func(self._handle)
+        lib_path = self._library_path
+        os.remove(lib_path)
+
 
     def __getattr__(self, name):
         if name.startswith("__") and name.endswith("__"):
@@ -955,7 +965,7 @@ class LibBuilder:
     ) -> DTLCLib | None:
 
         lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
-
+        os.close(lib_fd)
         if verbose > 0:
             print(f"library name: {lib_name}")
         compilec.mlir_compile(module, lib_name, llvm_out=llvm_out, llvm_only=llvm_only, verbose=verbose)
@@ -967,11 +977,11 @@ class LibBuilder:
 
     def compile_from(self, llvm_path: str, function_types: dict[builtin.StringAttr, func.FunctionType], verbose = 2) -> DTLCLib:
         lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
+        os.close(lib_fd)
         if verbose > 0:
             print(f"library name: {lib_name}")
         compilec.clang_compile(llvm_path, lib_name, verbose=verbose)
         function_types = {name.data: v for name, v in function_types.items()}
-
         return DTLCLib(lib_name, self.func_map, function_types)
 
     def build(self, verbose: int = 0):

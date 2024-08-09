@@ -81,7 +81,7 @@ def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None
                 llvm_tmp.write(mlir_translate_out)
                 llvm_tmp.flush()
             if not llvm_only:
-                clang_compile(llvm_out, lib_output, verbose)
+                clang_compile(llvm_out, lib_output, verbose=verbose)
         finally:
             os.remove(llvm_out)
     else:
@@ -92,7 +92,7 @@ def mlir_compile(module: builtin.ModuleOp, lib_output: str, llvm_out: str = None
             llvm_fd.write(mlir_translate_out)
             llvm_fd.flush()
         if not llvm_only:
-            clang_compile(llvm_out, lib_output, verbose)
+            clang_compile(llvm_out, lib_output, verbose=verbose)
 
     if verbose > 0:
         print("Done compiling with mlir / clang")
@@ -102,9 +102,9 @@ def clang_compile(llvm_path: str, lib_output: str, verbose: int = 2):
     clang_args = ["clang"]
     clang_args.extend(['-o', lib_output])
     clang_args.append('-shared')
-    # clang_args.append("-c")
+    clang_args.append("-Wno-override-module")
     # clang_args.append("-v")
-    clang_args.append("-g")
+    # clang_args.append("-g")
     clang_args.append("-O3")
     clang_args.append(llvm_path)
 

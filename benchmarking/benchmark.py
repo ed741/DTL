@@ -91,20 +91,55 @@ class Benchmark(abc.ABC):
         lib_name = f"lib_{new_layout.number}_{new_order.number}"
         llvm_path = f"{self.base_dir}/llvm/{lib_name}.ll"
         print(f"Getting compiled library for: layout: {new_layout.number}, iter_order: {new_order.number}: ", end="")
-        module_clone = module.clone()
-        function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
-                                           iteration_map,
-                                           new_order.make_iter_dict(), verbose=0)
+        llvm_exists = os.path.exists(llvm_path)
+
+        if llvm_exists and self.only_compile_to_llvm:
+            print(f"Found existing LLVM file and Skipping LLVM compilation")
+            return None
+        elif not llvm_exists and self.do_not_compile_mlir:
+            print("Do not compile mlir is set, but no llvm ir file was found")
+            return None
+        else:
+            module_clone = module.clone()
+            function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
+                                               iteration_map,
+                                               new_order.make_iter_dict(), verbose=0)
+            if llvm_exists:
+                print(f"Found existing LLVM file, ",  end="")
+                lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
+                print(f"LLVM file compiled to {lib._library_path}")
+                self._lib_store[key] = lib
+                return lib
+            else:
+                lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path,
+                                          llvm_only=self.only_compile_to_llvm, verbose=0)
+                if lib is not None:
+                    print(f"Compiled to LLVM: {llvm_path} and then to library: {lib._library_path}")
+                    self._lib_store[key] = lib
+                    return lib
+                else:
+                    print(f"Compiled to LLVM: {llvm_path} and but no library was produced.")
+                    return None
+
         if os.path.exists(llvm_path):
             print(f"Found existing LLVM file, ", end="")
             if not self.only_compile_to_llvm:
+                module_clone = module.clone()
+                function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
+                                                   iteration_map,
+                                                   new_order.make_iter_dict(), verbose=0)
                 lib = lib_builder.compile_from(llvm_path, function_types, verbose=0)
                 print(f"LLVM file compiled to {lib._library_path}")
             else:
                 print("Skipping LLVM compilation")
+                return None
         elif self.do_not_compile_mlir:
             print("Do not compile mlir is set, but no llvm ir file was found")
         else:
+            module_clone = module.clone()
+            function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
+                                               iteration_map,
+                                               new_order.make_iter_dict(), verbose=0)
             lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path,
                                           llvm_only=self.only_compile_to_llvm, verbose=0)
             if lib is not None:
@@ -162,9 +197,13 @@ class Benchmark(abc.ABC):
                      "bit_repeatable"])
 
             lib = None
+            count = 0
+            total_l_o_pairs = len(layouts) * len(orders)
+
             for new_layout in layouts:
                 for new_order in orders:
-                    print(f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}")
+                    count += 1
+                    print(f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}. ({count}/{total_l_o_pairs})")
                     results = []
                     results_correct = True
                     if all((new_layout.number, new_order.number, rep) in results_done for rep in range(self.repeats)):

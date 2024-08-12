@@ -153,8 +153,8 @@ class DTLCLib:
             return caller
         if name not in self._funcs:
             raise KeyError(f"{name} not found in self._funcs: {self._funcs.keys()}")
-        if name not in self._funcs_types:
-            raise KeyError(f"{name} not found in self._funcs_types: {self._funcs_types.keys()}")
+        if name not in self._func_types:
+            raise KeyError(f"{name} not found in self._func_types: {self._func_types.keys()}")
         func_descriptor = self._funcs[name]
         func_type = self._func_types[name]
         if len(func_type.inputs) != len(func_descriptor.params):

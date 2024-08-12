@@ -85,7 +85,9 @@ class Benchmark(abc.ABC):
         self.run_benchmarking(lib_builder)
 
     def get_compiled_lib(self, new_layout: PtrMapping, new_order: IterationMapping, module: ModuleOp, lib_builder: LibBuilder, layout_graph: LayoutGraph, iteration_map: IterationMap) -> DTLCLib | None:
+        print(f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: ", end="")
         if (key := (new_layout.number, new_order.number)) in self._lib_store:
+            print("loaded from store")
             return self._lib_store[key]
 
         lib_name = f"lib_{new_layout.number}_{new_order.number}"
@@ -95,8 +97,6 @@ class Benchmark(abc.ABC):
         os.makedirs(os.path.dirname(lib_path), exist_ok=True)
         func_types_path = f"{self.base_dir}/func_types/{lib_name}"
         os.makedirs(os.path.dirname(func_types_path), exist_ok=True)
-
-        print(f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: ", end="")
 
         func_types_exists = os.path.exists(func_types_path)
         print("func_types: ", end="")
@@ -119,7 +119,8 @@ class Benchmark(abc.ABC):
         lib_exists = os.path.exists(lib_path)
         print("lib: ", end="")
         if lib_exists:
-            lib = DTLCLib(lib_path, lib_builder.func_map, function_types)
+            function_types_str = {k.data: v for k,v in function_types.items()}
+            lib = DTLCLib(lib_path, lib_builder.func_map, function_types_str)
             print("loaded.")
             self._lib_store[key] = lib
             return lib
@@ -150,7 +151,7 @@ class Benchmark(abc.ABC):
                                                        iteration_map,
                                                        new_order.make_iter_dict(), verbose=0)
                     with open(func_types_path, "wb") as f: f.write(pickle.dumps(function_types))
-                    print("remade", end="")
+                    print("remade, ", end="")
 
                 print("lib: ", end="")
                 lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path,
@@ -163,14 +164,14 @@ class Benchmark(abc.ABC):
                     print(f"compiled to LLVM: {llvm_path} but no lib was produced.")
                     return None
 
-    def close_compiled_lib(self, lib):
+    def close_compiled_lib(self, lib: DTLCLib, delete: bool =False):
         keys = []
         for k, value in self._lib_store.items():
             if value == lib:
                 keys.append(k)
         for k in keys:
             del self._lib_store[k]
-        lib._close(delete=True)
+        lib._close(delete=delete)
         del lib
 
     def run_benchmarking(self, lib_builder: LibBuilder) -> None:
@@ -205,7 +206,7 @@ class Benchmark(abc.ABC):
                     ["layout_mapping", "iter_mapping", "rep", "time", "within_epsilon", "per_run_error",
                      "bit_repeatable"])
 
-            lib = None
+
             count = 0
             total_l_o_pairs = len(layouts) * len(orders)
 
@@ -245,8 +246,8 @@ class Benchmark(abc.ABC):
                             results_correct &= epsilon_correct
                             print(
                                 f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable}")
-            if lib is not None:
-                self.close_compiled_lib(lib)
+                    if lib is not None:
+                        self.close_compiled_lib(lib)
         print("finished")
 
     def _run_benchmark(self, lib: DTLCLib):

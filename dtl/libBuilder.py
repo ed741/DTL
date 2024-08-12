@@ -112,7 +112,7 @@ class FunctionCaller:
 
 class DTLCLib:
     def __init__(
-        self, library_path, funcs, function_types: dict[str, builtin.FunctionType]
+        self, library_path: str, funcs: dict[str, FuncTypeDescriptor], function_types: dict[str, builtin.FunctionType]
     ):
         self._library_path = library_path
         self._funcs: dict[str, FuncTypeDescriptor] = (
@@ -127,11 +127,15 @@ class DTLCLib:
         self._dlclose_func.argtypes = [ctypes.c_void_p]
         self._handle = self._lib._handle
 
-    def _close(self, delete=False):
+        if set(self._funcs.keys()) != set(self._func_types.keys()):
+            raise ValueError(f"Mismatch between funcs and func types: {self._funcs.keys()}, {self._func_types.keys()}")
+
+    def _close(self, delete: bool =False):
         del self._lib
         self._dlclose_func(self._handle)
         lib_path = self._library_path
-        os.remove(lib_path)
+        if delete:
+            os.remove(lib_path)
 
 
     def __getattr__(self, name):
@@ -144,10 +148,13 @@ class DTLCLib:
         return func
 
     def __getitem__(self, name) -> FunctionCaller:
+        caller = self._callers.get(name, None)
+        if caller is not None:
+            return caller
         if name not in self._funcs:
-            raise KeyError(name)
-        if name in self._callers:
-            return self._callers[name]
+            raise KeyError(f"{name} not found in self._funcs: {self._funcs.keys()}")
+        if name not in self._funcs_types:
+            raise KeyError(f"{name} not found in self._funcs_types: {self._funcs_types.keys()}")
         func_descriptor = self._funcs[name]
         func_type = self._func_types[name]
         if len(func_type.inputs) != len(func_descriptor.params):

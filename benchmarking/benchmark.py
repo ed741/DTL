@@ -13,16 +13,32 @@ import numpy as np
 from dtl.libBuilder import DTLCLib, LibBuilder
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.printer import Printer
-from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import IterationGenerator, IterationMapping
-from xdsl.transforms.experimental.dlt.generate_dlt_layouts import LayoutGenerator, PtrMapping
+from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
+    IterationGenerator,
+    IterationMapping,
+)
+from xdsl.transforms.experimental.dlt.generate_dlt_layouts import (
+    LayoutGenerator,
+    PtrMapping,
+)
 from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
 from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
 
-_T = typing.TypeVar('_T', bound=tuple["_CData", ...])
+_T = typing.TypeVar("_T", bound=tuple["_CData", ...])
+
 
 class Benchmark(abc.ABC):
 
-    def __init__(self, base_dir: str, layout_store: str, order_store: str, runs: int, repeats: int, opt_num: int, epsilon: float):
+    def __init__(
+        self,
+        base_dir: str,
+        layout_store: str,
+        order_store: str,
+        runs: int,
+        repeats: int,
+        opt_num: int,
+        epsilon: float,
+    ):
         self.base_dir = base_dir
         self.runs = runs
         self.repeats = repeats
@@ -63,7 +79,9 @@ class Benchmark(abc.ABC):
         if os.path.exists(path):
             loaded_array = np.loadtxt(path)
             if not np.equal(array, loaded_array).all():
-                print(f"ERROR! loaded array does not match newly calculated reference array: {path}")
+                print(
+                    f"ERROR! loaded array does not match newly calculated reference array: {path}"
+                )
             else:
                 # print(f"Reference array consistent with {path}")
                 pass
@@ -84,7 +102,11 @@ class Benchmark(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def test(self, lib: DTLCLib, args: _T, first_args: _T) -> tuple[bool, float, bool]: # (within_epsilon, total_error, bit_wise_reapeatable)
+    def test(
+        self, lib: DTLCLib, args: _T, first_args: _T
+    ) -> tuple[
+        bool, float, bool
+    ]:  # (within_epsilon, total_error, bit_wise_reapeatable)
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -92,14 +114,27 @@ class Benchmark(abc.ABC):
         raise NotImplementedError
 
     def run(self):
-        print(f"{datetime.datetime.now()} Running benchmark {type(self)} at {self.base_dir}")
+        print(
+            f"{datetime.datetime.now()} Running benchmark {type(self)} at {self.base_dir}"
+        )
         print(f"{datetime.datetime.now()} Defining lib builder")
         lib_builder = self.define_lib_builder()
         print(f"{datetime.datetime.now()} Starting benchmarking...")
         self.run_benchmarking(lib_builder)
 
-    def get_compiled_lib(self, new_layout: PtrMapping, new_order: IterationMapping, module: ModuleOp, lib_builder: LibBuilder, layout_graph: LayoutGraph, iteration_map: IterationMap) -> DTLCLib | None:
-        print(f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: ", end="")
+    def get_compiled_lib(
+        self,
+        new_layout: PtrMapping,
+        new_order: IterationMapping,
+        module: ModuleOp,
+        lib_builder: LibBuilder,
+        layout_graph: LayoutGraph,
+        iteration_map: IterationMap,
+    ) -> DTLCLib | None:
+        print(
+            f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: ",
+            end="",
+        )
         if (key := (new_layout.number, new_order.number)) in self._lib_store:
             print("loaded from store")
             return self._lib_store[key]
@@ -121,10 +156,16 @@ class Benchmark(abc.ABC):
             print("loaded, ", end="")
         elif not self.do_not_lower:
             module_clone = module.clone()
-            function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
-                                               iteration_map,
-                                               new_order.make_iter_dict(), verbose=0)
-            with open(func_types_path, "wb") as f: f.write(pickle.dumps(function_types))
+            function_types = lib_builder.lower(
+                module_clone,
+                layout_graph,
+                new_layout.make_ptr_dict(),
+                iteration_map,
+                new_order.make_iter_dict(),
+                verbose=0,
+            )
+            with open(func_types_path, "wb") as f:
+                f.write(pickle.dumps(function_types))
             print("made, ", end="")
         else:
             print("not found, but do not lower is set")
@@ -133,7 +174,7 @@ class Benchmark(abc.ABC):
         lib_exists = os.path.exists(lib_path)
         print("lib: ", end="")
         if lib_exists:
-            function_types_str = {k.data: v for k,v in function_types.items()}
+            function_types_str = {k.data: v for k, v in function_types.items()}
             lib = DTLCLib(lib_path, lib_builder.func_map, function_types_str)
             print("loaded.")
             self._lib_store[key] = lib
@@ -151,8 +192,14 @@ class Benchmark(abc.ABC):
             return None
         else:
             if llvm_exists:
-                print(f"found, ",  end="")
-                lib = lib_builder.compile_from(llvm_path, function_types, lib_path=lib_path, verbose=0)
+                print(f"found, ", end="")
+                lib = lib_builder.compile_from(
+                    llvm_path,
+                    function_types,
+                    lib_path=lib_path,
+                    clang_args=self.get_extra_clang_args(),
+                    verbose=0,
+                )
                 print(f"lib compiled to: {lib_path}")
                 self._lib_store[key] = lib
                 return lib
@@ -161,24 +208,39 @@ class Benchmark(abc.ABC):
                 if module_clone is None:
                     print("func_types: ", end="")
                     module_clone = module.clone()
-                    function_types = lib_builder.lower(module_clone, layout_graph, new_layout.make_ptr_dict(),
-                                                       iteration_map,
-                                                       new_order.make_iter_dict(), verbose=0)
-                    with open(func_types_path, "wb") as f: f.write(pickle.dumps(function_types))
+                    function_types = lib_builder.lower(
+                        module_clone,
+                        layout_graph,
+                        new_layout.make_ptr_dict(),
+                        iteration_map,
+                        new_order.make_iter_dict(),
+                        verbose=0,
+                    )
+                    with open(func_types_path, "wb") as f:
+                        f.write(pickle.dumps(function_types))
                     print("remade, ", end="")
 
                 print("lib: ", end="")
-                lib = lib_builder.compile(module_clone, function_types, llvm_out=llvm_path,
-                                          llvm_only=self.only_compile_to_llvm, lib_path=lib_path, verbose=0)
+                lib = lib_builder.compile(
+                    module_clone,
+                    function_types,
+                    llvm_out=llvm_path,
+                    llvm_only=self.only_compile_to_llvm,
+                    lib_path=lib_path,
+                    clang_args=self.get_extra_clang_args(),
+                    verbose=0,
+                )
                 if lib is not None:
-                    print(f"compiled to binary. LLVM: {llvm_path}, lib: {lib._library_path}")
+                    print(
+                        f"compiled to binary. LLVM: {llvm_path}, lib: {lib._library_path}"
+                    )
                     self._lib_store[key] = lib
                     return lib
                 else:
                     print(f"compiled to LLVM: {llvm_path} but no lib was produced.")
                     return None
 
-    def close_compiled_lib(self, lib: DTLCLib, delete: bool =False):
+    def close_compiled_lib(self, lib: DTLCLib, delete: bool = False):
         keys = []
         for k, value in self._lib_store.items():
             if value == lib:
@@ -191,7 +253,9 @@ class Benchmark(abc.ABC):
     def run_benchmarking(self, lib_builder: LibBuilder) -> None:
         module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
 
-        print(f"{datetime.datetime.now()} Generating possible layouts and iteration maps")
+        print(
+            f"{datetime.datetime.now()} Generating possible layouts and iteration maps"
+        )
         layouts, orders = self._generate_versions(layout_graph, iteration_map)
         if self.only_generate:
             print("Only Generate is set, so benchmarking is ending.")
@@ -217,9 +281,16 @@ class Benchmark(abc.ABC):
             result_writer = csv.writer(csv_results)
             if write_results_header:
                 result_writer.writerow(
-                    ["layout_mapping", "iter_mapping", "rep", "time", "within_epsilon", "per_run_error",
-                     "bit_repeatable"])
-
+                    [
+                        "layout_mapping",
+                        "iter_mapping",
+                        "rep",
+                        "time",
+                        "within_epsilon",
+                        "per_run_error",
+                        "bit_repeatable",
+                    ]
+                )
 
             count = 0
             total_l_o_pairs = len(layouts) * len(orders)
@@ -227,39 +298,65 @@ class Benchmark(abc.ABC):
             for new_layout in layouts:
                 for new_order in orders:
                     count += 1
-                    print(f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}. ({count}/{total_l_o_pairs})")
+                    print(
+                        f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}. ({count}/{total_l_o_pairs})"
+                    )
                     results = []
                     results_correct = True
-                    if all((new_layout.number, new_order.number, rep) in results_done for rep in range(self.repeats)):
-                        print(f"{datetime.datetime.now()} Skipping layout: {new_layout.number}, order: {new_order.number} for all repeats [0..{self.repeats}) as they are already in the results file")
+                    if all(
+                        (new_layout.number, new_order.number, rep) in results_done
+                        for rep in range(self.repeats)
+                    ):
+                        print(
+                            f"{datetime.datetime.now()} Skipping layout: {new_layout.number}, order: {new_order.number} for all repeats [0..{self.repeats}) as they are already in the results file"
+                        )
                         continue
 
-                    lib = self.get_compiled_lib(new_layout, new_order, module, lib_builder, layout_graph,
-                                                iteration_map)
+                    lib = self.get_compiled_lib(
+                        new_layout,
+                        new_order,
+                        module,
+                        lib_builder,
+                        layout_graph,
+                        iteration_map,
+                    )
                     for rep in range(self.repeats):
                         test_id = (new_layout.number, new_order.number, rep)
                         if test_id in results_done:
                             print(
-                                f"Skipping layout: {new_layout.number}, order: {new_order.number}, rep: {rep} as it is already in the results file")
+                                f"Skipping layout: {new_layout.number}, order: {new_order.number}, rep: {rep} as it is already in the results file"
+                            )
                             continue
                         print(
                             f"{datetime.datetime.now()} Running benchmark repeat :: l: {new_layout.number}, o: {new_order.number}, rep: {rep} ",
-                            end="")
+                            end="",
+                        )
 
                         if self.skip_testing:
                             print(f"Skipping testing")
                         elif lib is None:
                             print(f"Cannot test because lib is none")
                         else:
-                            result, epsilon_correct, error_per_run, bit_repeatable = self._run_benchmark(lib)
+                            result, epsilon_correct, error_per_run, bit_repeatable = (
+                                self._run_benchmark(lib)
+                            )
                             result_writer.writerow(
-                                [new_layout.number, new_order.number, rep, result, epsilon_correct, error_per_run,
-                                 bit_repeatable])
+                                [
+                                    new_layout.number,
+                                    new_order.number,
+                                    rep,
+                                    result,
+                                    epsilon_correct,
+                                    error_per_run,
+                                    bit_repeatable,
+                                ]
+                            )
                             csv_results.flush()
                             results.append(result)
                             results_correct &= epsilon_correct
                             print(
-                                f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable}")
+                                f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable}"
+                            )
                     if lib is not None:
                         self.close_compiled_lib(lib)
         print("finished")
@@ -269,7 +366,7 @@ class Benchmark(abc.ABC):
         chars = 0
 
         val = "setting up"
-        print("\b"*chars + val, end="")
+        print("\b" * chars + val, end="")
         chars = len(val)
 
         for r in range(self.runs):
@@ -283,6 +380,7 @@ class Benchmark(abc.ABC):
         chars = len(val)
 
         single_benchmark = self.get_benchmark(lib)
+
         def benchmark():
             for args in run_args:
                 single_benchmark(args)
@@ -328,7 +426,9 @@ class Benchmark(abc.ABC):
 
         return result, total_within_epsilon, mean_error, total_bitwise_consistent
 
-    def _generate_versions(self, layout_graph: LayoutGraph, iteration_map: IterationMap) -> tuple[list[PtrMapping], list[IterationMapping]]:
+    def _generate_versions(
+        self, layout_graph: LayoutGraph, iteration_map: IterationMap
+    ) -> tuple[list[PtrMapping], list[IterationMapping]]:
 
         layout_store_keys = f"{self.layout_store}/keys"
         os.makedirs(layout_store_keys, exist_ok=True)
@@ -349,19 +449,26 @@ class Benchmark(abc.ABC):
                 loaded_layout_graph = pickle.load(f)
 
             if layout_graph.matches(loaded_layout_graph):
-                print(f"{'\b'*count}Found matching layout graph in layout store: {key_int}")
+                print(
+                    f"{'\b'*count}Found matching layout graph in layout store: {key_int}"
+                )
                 with open(f"{layout_store_values}/{key}", "rb") as f:
                     loaded_layouts = pickle.load(f)
                 break
         if loaded_layouts is None and not self.do_not_generate:
             new_key = max_key + 1
-            print("\b"*count, end="")
-            print(f"No matching layout graph found after checking {count} graphs. Generating from scratch as {new_key}")
-            new_layouts = LayoutGenerator(layout_graph, plot_dir=f"{self.layout_store}/gen/{new_key}").generate_mappings(
-                take_first=self.take_first_layouts)
+            print("\b" * count, end="")
+            print(
+                f"No matching layout graph found after checking {count} graphs. Generating from scratch as {new_key}"
+            )
+            new_layouts = LayoutGenerator(
+                layout_graph, plot_dir=f"{self.layout_store}/gen/{new_key}"
+            ).generate_mappings(take_first=self.take_first_layouts)
             print("Writing new layouts to pickle")
-            with open(f"{layout_store_values}/{new_key}", "wb") as f: f.write(pickle.dumps(new_layouts))
-            with open(f"{layout_store_keys}/{new_key}", "wb") as f: f.write(pickle.dumps(layout_graph))
+            with open(f"{layout_store_values}/{new_key}", "wb") as f:
+                f.write(pickle.dumps(new_layouts))
+            with open(f"{layout_store_keys}/{new_key}", "wb") as f:
+                f.write(pickle.dumps(layout_graph))
             loaded_layouts = new_layouts
 
         order_store_keys = f"{self.order_store}/keys"
@@ -383,19 +490,26 @@ class Benchmark(abc.ABC):
                 loaded_iteration_map = pickle.load(f)
 
             if iteration_map.matches(loaded_iteration_map):
-                print(f"{'\b' * count}Found matching iteration map in order store: {key_int}")
+                print(
+                    f"{'\b' * count}Found matching iteration map in order store: {key_int}"
+                )
                 with open(f"{order_store_values}/{key}", "rb") as f:
                     loaded_orders = pickle.load(f)
                 break
         if loaded_orders is None and not self.do_not_generate:
             new_key = max_key + 1
             print("\b" * count, end="")
-            print(f"No matching iteration map found after checking {count} maps. Generating from scratch as {new_key}")
-            new_orders = IterationGenerator(iteration_map, plot_dir=f"{self.order_store}/gen/{new_key}").generate_mappings(
-                take_first=self.take_first_orders)
+            print(
+                f"No matching iteration map found after checking {count} maps. Generating from scratch as {new_key}"
+            )
+            new_orders = IterationGenerator(
+                iteration_map, plot_dir=f"{self.order_store}/gen/{new_key}"
+            ).generate_mappings(take_first=self.take_first_orders)
             print("Writing new orders to pickle")
-            with open(f"{order_store_values}/{new_key}", "wb") as f: f.write(pickle.dumps(new_orders))
-            with open(f"{order_store_keys}/{new_key}", "wb") as f: f.write(pickle.dumps(iteration_map))
+            with open(f"{order_store_values}/{new_key}", "wb") as f:
+                f.write(pickle.dumps(new_orders))
+            with open(f"{order_store_keys}/{new_key}", "wb") as f:
+                f.write(pickle.dumps(iteration_map))
             loaded_orders = new_orders
 
         if loaded_layouts is None:

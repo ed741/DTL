@@ -110,6 +110,9 @@ def mlir_compile(
 
 
 def clang_compile(llvm_path: str, lib_output: str, extra_clang_args: list[str] = None, verbose: int = 2):
+    if extra_clang_args is None:
+        extra_clang_args = []
+
     clang_args = ["clang"]
     clang_args.extend(["-o", lib_output])
     clang_args.append("-shared")

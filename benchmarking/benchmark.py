@@ -72,7 +72,7 @@ class Benchmark(abc.ABC):
             case 3:
                 return ["-O3"]
             case 4:
-                return ["-O3", "-mcpu=native"]
+                return ["-O3", "-march=native"]
 
     def handle_reference_array(self, array: nptyping.NDArray, name: str):
         path = f"{self.base_dir}/{name}"

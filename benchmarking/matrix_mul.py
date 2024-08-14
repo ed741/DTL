@@ -15,15 +15,15 @@ _Args = tuple[Any, StructType, StructType, StructType]
 
 
 class MatMul(Benchmark, abc.ABC):
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, epsilon: float):
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, opt_num: int, epsilon: float):
         var_name = "scope" if use_scope_vars else "static"
         new_base_dir = f"{base_dir}/matmul"
-        results_base_dir = f"{new_base_dir}/{name}_{var_name}_{i}.{j}.{k}_{seed}_{runs}"
+        results_base_dir = f"{new_base_dir}/{name}_{var_name}_O{opt_num}_{i}.{j}.{k}_{seed}_{runs}"
 
         self.i, self.j, self.k = i, j, k
         self.seed = seed
         self.use_scope_vars = use_scope_vars
-        super().__init__(results_base_dir, f"{new_base_dir}/layouts", f"{new_base_dir}/orders", runs, repeats, epsilon)
+        super().__init__(results_base_dir, f"{new_base_dir}/layouts", f"{new_base_dir}/orders", runs, repeats, opt_num, epsilon)
 
         # print("initing np a & b")
         np_a = np.zeros((i, j), dtype=np.float32)
@@ -140,9 +140,9 @@ class MatMul(Benchmark, abc.ABC):
 
 class StaticTriple(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, opt_level: int, epsilon: float):
         name = "triple"
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, epsilon)
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
         lib_builder.make_init("init", (a, b, c), [], free_name="dealloc")
@@ -159,9 +159,9 @@ class StaticTriple(MatMul):
 
 class StaticPair(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, opt_level: int, epsilon: float):
         name = "pair"
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, epsilon)
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
         lib_builder.make_init("init_AB", (a, b), [], free_name="dealloc_AB")
@@ -180,9 +180,9 @@ class StaticPair(MatMul):
 
 class StaticSingles(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, epsilon: float):
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, opt_level: int, epsilon: float):
         name = "singles"
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, epsilon)
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
 
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
@@ -208,28 +208,28 @@ if __name__ == '__main__':
     repeats = 5
     runs = 10
     benchmarks = []
-    # benchmarks.append(StaticTriple(128,128,128,True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    # benchmarks.append(StaticTriple(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    # benchmarks.append(StaticTriple(128,128,128,True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    # benchmarks.append(StaticTriple(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 
-    # benchmarks.append(StaticTriple(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    # benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, epsilon=_Epsilon))
+    # benchmarks.append(StaticTriple(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    # benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 
-    for benchmark in benchmarks:
-        benchmark.skip_testing = True
-        # benchmark.only_compile_to_llvm = True
-        # benchmark.take_first_layouts = 5
-        # benchmark.take_first_orders = 5
-        benchmark.run()
-        benchmark.skip_testing = False
-        benchmark.only_compile_to_llvm = False
+    # for benchmark in benchmarks:
+    #     benchmark.skip_testing = True
+    #     # benchmark.only_compile_to_llvm = True
+    #     # benchmark.take_first_layouts = 5
+    #     # benchmark.take_first_orders = 5
+    #     benchmark.run()
+    #     benchmark.skip_testing = False
+    #     benchmark.only_compile_to_llvm = False
 
     for benchmark in benchmarks:
         benchmark.run()

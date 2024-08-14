@@ -22,10 +22,11 @@ _T = typing.TypeVar('_T', bound=tuple["_CData", ...])
 
 class Benchmark(abc.ABC):
 
-    def __init__(self, base_dir: str, layout_store: str, order_store: str, runs: int, repeats: int, epsilon: float):
+    def __init__(self, base_dir: str, layout_store: str, order_store: str, runs: int, repeats: int, opt_num: int, epsilon: float):
         self.base_dir = base_dir
         self.runs = runs
         self.repeats = repeats
+        self.opt_num = opt_num
         self.epsilon = epsilon
 
         self.layout_store = layout_store
@@ -43,6 +44,19 @@ class Benchmark(abc.ABC):
         self.skip_testing = False
 
         os.makedirs(self.base_dir, exist_ok=True)
+
+    def get_extra_clang_args(self) -> list[str]:
+        match self.opt_num:
+            case 0:
+                return []
+            case 1:
+                return ["-O1"]
+            case 2:
+                return ["-O2"]
+            case 3:
+                return ["-O3"]
+            case 4:
+                return ["-O3", "-mcpu=native"]
 
     def handle_reference_array(self, array: nptyping.NDArray, name: str):
         path = f"{self.base_dir}/{name}"

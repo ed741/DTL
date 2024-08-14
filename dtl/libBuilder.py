@@ -112,7 +112,10 @@ class FunctionCaller:
 
 class DTLCLib:
     def __init__(
-        self, library_path: str, funcs: dict[str, FuncTypeDescriptor], function_types: dict[str, builtin.FunctionType]
+        self,
+        library_path: str,
+        funcs: dict[str, FuncTypeDescriptor],
+        function_types: dict[str, builtin.FunctionType],
     ):
         self._library_path = library_path
         self._funcs: dict[str, FuncTypeDescriptor] = (
@@ -123,20 +126,21 @@ class DTLCLib:
         self._func_types = function_types  # describe funcs as original (with return vals) with llvm types
         self._ctype_classes: dict = {}
 
-        self._dlclose_func = ctypes.cdll.LoadLibrary('').dlclose
+        self._dlclose_func = ctypes.cdll.LoadLibrary("").dlclose
         self._dlclose_func.argtypes = [ctypes.c_void_p]
         self._handle = self._lib._handle
 
         if set(self._funcs.keys()) != set(self._func_types.keys()):
-            raise ValueError(f"Mismatch between funcs and func types: {self._funcs.keys()}, {self._func_types.keys()}")
+            raise ValueError(
+                f"Mismatch between funcs and func types: {self._funcs.keys()}, {self._func_types.keys()}"
+            )
 
-    def _close(self, delete: bool =False):
+    def _close(self, delete: bool = False):
         del self._lib
         self._dlclose_func(self._handle)
         lib_path = self._library_path
         if delete:
             os.remove(lib_path)
-
 
     def __getattr__(self, name):
         if name.startswith("__") and name.endswith("__"):
@@ -154,7 +158,9 @@ class DTLCLib:
         if name not in self._funcs:
             raise KeyError(f"{name} not found in self._funcs: {self._funcs.keys()}")
         if name not in self._func_types:
-            raise KeyError(f"{name} not found in self._func_types: {self._func_types.keys()}")
+            raise KeyError(
+                f"{name} not found in self._func_types: {self._func_types.keys()}"
+            )
         func_descriptor = self._funcs[name]
         func_type = self._func_types[name]
         if len(func_type.inputs) != len(func_descriptor.params):
@@ -335,9 +341,7 @@ class LibBuilder:
             self.tensor_elem_tuple_name_idx += 1
 
             for i, tensor_var in enumerate(tensor_vars):
-                child_elements = self._set_dlt_type_elems_for_tensor_var(
-                    tensor_var
-                )
+                child_elements = self._set_dlt_type_elems_for_tensor_var(tensor_var)
                 new_member = dlt.MemberAttr(f"T_{level}", f"{i}")
                 child_elements = self._add_member_in_tupleStruct_layer_elements(
                     child_elements, add=new_member
@@ -405,7 +409,12 @@ class LibBuilder:
                     ptr_id,
                 )
             self.tensor_var_details[tensor_vars] = ptr_type
-            common_member_name = set.intersection(*[{m.structName.data for m in elem.member_specifiers} for elem in ptr_type.contents_type.elements])
+            common_member_name = set.intersection(
+                *[
+                    {m.structName.data for m in elem.member_specifiers}
+                    for elem in ptr_type.contents_type.elements
+                ]
+            )
             assert len(common_member_name) == 1
             common_member_name = common_member_name.pop()
             for i, child in enumerate(tensor_vars):
@@ -803,7 +812,13 @@ class LibBuilder:
             "abort", llvm.LLVMFunctionType([]), linkage=llvm.LinkageAttr("external")
         )
 
-        scope_op = dlt.LayoutScopeOp([(dlt.ScopeDefinedExtentAttr(vs.name), i) for vs, i in self._scope_vector_spaces.items()], self.funcs)
+        scope_op = dlt.LayoutScopeOp(
+            [
+                (dlt.ScopeDefinedExtentAttr(vs.name), i)
+                for vs, i in self._scope_vector_spaces.items()
+            ],
+            self.funcs,
+        )
         module = ModuleOp([malloc_func, free_func, memcpy_func, abort_func, scope_op])
         module.verify()
 
@@ -969,6 +984,7 @@ class LibBuilder:
         llvm_out: str = None,
         llvm_only: bool = False,
         lib_path: str = None,
+        clang_args: list[str] = None,
         verbose=2,
     ) -> DTLCLib | None:
         if lib_path is None:
@@ -977,20 +993,29 @@ class LibBuilder:
             lib_path = lib_name
         if verbose > 0:
             print(f"library name: {lib_path}")
-        compilec.mlir_compile(module, lib_path, llvm_out=llvm_out, llvm_only=llvm_only, verbose=verbose)
+        compilec.mlir_compile(
+            module, lib_path, llvm_out=llvm_out, llvm_only=llvm_only, clang_args=clang_args, verbose=verbose
+        )
         if llvm_only:
             return None
         function_types = {name.data: v for name, v in function_types.items()}
         return DTLCLib(lib_path, self.func_map, function_types)
 
-    def compile_from(self, llvm_path: str, function_types: dict[builtin.StringAttr, func.FunctionType], lib_path: str = None, verbose = 2) -> DTLCLib:
+    def compile_from(
+        self,
+        llvm_path: str,
+        function_types: dict[builtin.StringAttr, func.FunctionType],
+        lib_path: str = None,
+        clang_args: list[str] = None,
+        verbose=2,
+    ) -> DTLCLib:
         if lib_path is None:
             lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
             os.close(lib_fd)
             lib_path = lib_name
         if verbose > 0:
             print(f"library name: {lib_path}")
-        compilec.clang_compile(llvm_path, lib_path, verbose=verbose)
+        compilec.clang_compile(llvm_path, lib_path, extra_clang_args=clang_args, verbose=verbose)
         function_types = {name.data: v for name, v in function_types.items()}
         return DTLCLib(lib_path, self.func_map, function_types)
 
@@ -998,9 +1023,9 @@ class LibBuilder:
 
         module, layout_graph, iteration_map = self.prepare(verbose)
 
-        iteration_generator = IterationGenerator(iteration_map)
+        # iteration_generator = IterationGenerator(iteration_map)
         # new_iter_maps = iteration_generator.generate_mappings()
-        layout_generator = LayoutGenerator(layout_graph)
+        # layout_generator = LayoutGenerator(layout_graph)
         # new_layout_maps = layout_generator.generate_mappings()
 
         original_type_map = layout_graph.get_type_map()
@@ -1043,7 +1068,14 @@ class LibBuilder:
             id: _make_nested_order(order) for id, order in new_order_map.items()
         }
 
-        function_types = self.lower(module, layout_graph, new_type_map, iteration_map, new_orders, verbose=verbose)
+        function_types = self.lower(
+            module,
+            layout_graph,
+            new_type_map,
+            iteration_map,
+            new_orders,
+            verbose=verbose,
+        )
         return self.compile(module, function_types, verbose=verbose)
 
 

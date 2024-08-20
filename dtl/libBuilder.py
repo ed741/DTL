@@ -17,7 +17,7 @@ from dtl import (
 )
 from dtlpp.backends import xdsl as xdtl
 from xdsl import ir
-from xdsl.dialects import builtin, arith, printf, llvm, func
+from xdsl.dialects import builtin, arith, printf, llvm, func, scf
 from xdsl.dialects.builtin import IndexType, ModuleOp, i64
 from xdsl.dialects.experimental import dlt
 from xdsl.dialects.func import Return, FuncOp
@@ -511,12 +511,12 @@ class LibBuilder:
         extents_map = {}
         for e in extents:
             arg = block.insert_arg(IndexType(), arg_idx)
-            debug = [
-                c := builtin.UnrealizedConversionCastOp.get([arg], [i64]),
-                trunc_op := arith.TruncIOp(c.outputs[0], builtin.i32),
-                printf.PrintIntOp(trunc_op.result),
-            ] + printf.PrintCharOp.from_constant_char_ops("\n")
-            block.add_ops(debug)
+            # debug = [
+            #     c := builtin.UnrealizedConversionCastOp.get([arg], [i64]),
+            #     trunc_op := arith.TruncIOp(c.outputs[0], builtin.i32),
+            #     printf.PrintIntOp(trunc_op.result),
+            # ] + printf.PrintCharOp.from_constant_char_ops("\n")
+            # block.add_ops(debug)
             arg_idx += 1
             if e is not None:
                 assert isinstance(e, UnknownSizeVectorSpace)
@@ -688,22 +688,30 @@ class LibBuilder:
         inner_ptr = iter_op.get_block_arg_for_tensor_arg_idx(0)
         ret = iter_op.body.block.last_op
         iter_op.body.block.insert_op_before(
-            get_op := dlt.GetOp(inner_ptr, get_type=builtin.f32), ret
+            get_op := dlt.GetSOp(inner_ptr, get_type=builtin.f32), ret
         )
-        iter_op.body.block.insert_op_before(
-            printf.PrintFormatOp(
-                f"{name}:: "
-                + (
-                    ",".join(
+        print_str = f"{name}:: " + (",".join(
                         [f"{dim.dimensionName} ({dim.extent}): {{}}" for dim in dims]
-                    )
-                )
-                + " -> {}",
-                *inner_idxs,
-                get_op.res,
-            ),
-            ret,
-        )
+                    ))
+        if_op = scf.If(get_op.found, [],
+               [
+                    printf.PrintFormatOp(
+                        print_str + " ->   {}",
+                        *inner_idxs,
+                        get_op.res,
+                    ),
+                   scf.Yield()
+               ],
+                [
+                    printf.PrintFormatOp(
+                        print_str + " -> * {}",
+                        *inner_idxs,
+                        get_op.res,
+                    ),
+                    scf.Yield()
+               ]
+               )
+        iter_op.body.block.insert_op_before(if_op, ret)
         block.add_op(Return())
 
         region = Region([block])
@@ -924,6 +932,7 @@ class LibBuilder:
                     RemoveUnusedOperations(),
                     lower_dlt_to_.DLTSelectRewriter(),
                     lower_dlt_to_.DLTGetRewriter(),
+                    lower_dlt_to_.DLTGetSRewriter(),
                     lower_dlt_to_.DLTSetRewriter(),
                     lower_dlt_to_.DLTAllocRewriter(),
                     lower_dlt_to_.DLTDeallocRewriter(),

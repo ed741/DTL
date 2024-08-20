@@ -25,20 +25,10 @@ class MatMul(Benchmark, abc.ABC):
         self.use_scope_vars = use_scope_vars
         super().__init__(results_base_dir, f"{new_base_dir}/layouts", f"{new_base_dir}/orders", runs, repeats, opt_num, epsilon)
 
-        # print("initing np a & b")
-        np_a = np.zeros((i, j), dtype=np.float32)
-        np_b = np.zeros((j, k), dtype=np.float32)
-
         # print("setting random values in np a & b")
         r = Random(seed)
-        for i_i in range(i):
-            for i_j in range(j):
-                num = r.random()
-                np_a[i_i, i_j] = num
-        for i_j in range(j):
-            for i_k in range(k):
-                num = r.random()
-                np_b[i_j, i_k] = num
+
+        np_a, np_b = self.make_a_b(r)
 
         # print("generating np c")
         np_c = np.matmul(np_a, np_b)
@@ -50,6 +40,19 @@ class MatMul(Benchmark, abc.ABC):
         self.handle_reference_array(np_a, "np_a")
         self.handle_reference_array(np_b, "np_b")
         self.handle_reference_array(np_c, "np_c")
+
+    def make_a_b(self, r: Random) -> tuple[np.ndarray, np.ndarray]:
+        np_a = np.zeros((self.i, self.j), dtype=np.float32)
+        np_b = np.zeros((self.j, self.k), dtype=np.float32)
+        for i_i in range(self.i):
+            for i_j in range(self.j):
+                num = r.random()
+                np_a[i_i, i_j] = num
+        for i_j in range(self.j):
+            for i_k in range(self.k):
+                num = r.random()
+                np_b[i_j, i_k] = num
+        return np_a, np_b
 
 
     @abc.abstractmethod
@@ -99,10 +102,12 @@ class MatMul(Benchmark, abc.ABC):
         # print("set a & b")
         for i_i in range(self.np_a.shape[0]):
             for i_j in range(self.np_a.shape[1]):
-                lib.set_A(a, i_i, i_j, self.np_a[i_i, i_j])
+                if self.np_a[i_i, i_j] != 0:
+                    lib.set_A(a, i_i, i_j, self.np_a[i_i, i_j])
         for i_j in range(self.np_b.shape[0]):
             for i_k in range(self.np_b.shape[1]):
-                lib.set_B(b, i_j, i_k, self.np_b[i_j, i_k])
+                if self.np_b[i_j, i_k] != 0:
+                    lib.set_B(b, i_j, i_k, self.np_b[i_j, i_k])
         return root, a, b, c
 
     def get_benchmark(self, lib: DTLCLib) -> typing.Callable[[_Args], None]:
@@ -140,8 +145,8 @@ class MatMul(Benchmark, abc.ABC):
 
 class StaticTriple(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, opt_level: int, epsilon: float):
-        name = "triple"
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+        name = f"triple_{name}"
         super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
@@ -159,8 +164,8 @@ class StaticTriple(MatMul):
 
 class StaticPair(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, opt_level: int, epsilon: float):
-        name = "pair"
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str,  runs: int, repeats: int, opt_level: int, epsilon: float):
+        name = f"pair_{name}"
         super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
 
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
@@ -180,8 +185,8 @@ class StaticPair(MatMul):
 
 class StaticSingles(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, runs: int, repeats: int, opt_level: int, epsilon: float):
-        name = "singles"
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+        name = f"singles_{name}"
         super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
 
 
@@ -202,6 +207,47 @@ class StaticSingles(MatMul):
         lib.dealloc_B(root_b)
         lib.dealloc_C(root_c)
 
+class RandomSparseSingles(StaticSingles):
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, rate_a: float, rate_b: float, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+        name = f"randomSparse_{rate_a}_{rate_b}_{name}"
+        self.rate_a = rate_a
+        self.rate_b = rate_b
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
+
+
+    def make_a_b(self, r: Random) -> tuple[np.ndarray, np.ndarray]:
+        np_a = np.zeros((self.i, self.j), dtype=np.float32)
+        np_b = np.zeros((self.j, self.k), dtype=np.float32)
+        for i_i in range(self.i):
+            for i_j in range(self.j):
+                if r.random() >= self.rate_a:
+                    num = r.random()
+                    np_a[i_i, i_j] = num
+        for i_j in range(self.j):
+            for i_k in range(self.k):
+                if r.random() >= self.rate_b:
+                    num = r.random()
+                    np_b[i_j, i_k] = num
+        return np_a, np_b
+
+class RowSparseSingles(StaticSingles):
+    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, rate_a: float, rate_b: float, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+        name = f"randomSparse_{rate_a}_{rate_b}_{name}"
+        self.rate_a = rate_a
+        self.rate_b = rate_b
+        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
+
+    def sparsify(self, np_a, np_b, r: Random) -> tuple[np.ndarray, np.ndarray]:
+        for i_i in range(np_a.shape[0]):
+            if r.random() < self.rate_a:
+                for i_j in range(np_a.shape[1]):
+                    np_a[i_i, i_j] = 0
+        for i_j in range(np_b.shape[0]):
+            if r.random() < self.rate_b:
+                for i_k in range(np_b.shape[1]):
+                    np_b[i_j, i_k] = 0
+        return np_a, np_b
+
 
 if __name__ == '__main__':
     
@@ -209,18 +255,18 @@ if __name__ == '__main__':
     runs = 10
     benchmarks = []
     # benchmarks.append(StaticTriple(128,128,128,True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(128, 128, 128, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(128, 128, 128, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(128, 128, 128, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
     # benchmarks.append(StaticTriple(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(8, 8, 8, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(8, 8, 8, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 
     # benchmarks.append(StaticTriple(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(128, 128, 128, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(128, 128, 128, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
     # benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticPair(8, 8, 8, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    benchmarks.append(StaticSingles(8, 8, 8, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 
     # for benchmark in benchmarks:
     #     benchmark.skip_testing = True

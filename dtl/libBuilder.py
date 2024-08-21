@@ -690,27 +690,29 @@ class LibBuilder:
         iter_op.body.block.insert_op_before(
             get_op := dlt.GetSOp(inner_ptr, get_type=builtin.f32), ret
         )
-        print_str = f"{name}:: " + (",".join(
-                        [f"{dim.dimensionName} ({dim.extent}): {{}}" for dim in dims]
-                    ))
-        if_op = scf.If(get_op.found, [],
-               [
-                    printf.PrintFormatOp(
-                        print_str + " ->   {}",
-                        *inner_idxs,
-                        get_op.res,
-                    ),
-                   scf.Yield()
-               ],
-                [
-                    printf.PrintFormatOp(
-                        print_str + " -> * {}",
-                        *inner_idxs,
-                        get_op.res,
-                    ),
-                    scf.Yield()
-               ]
-               )
+        print_str = f"{name}:: " + (
+            ",".join([f"{dim.dimensionName} ({dim.extent}): {{}}" for dim in dims])
+        )
+        if_op = scf.If(
+            get_op.found,
+            [],
+            [
+                printf.PrintFormatOp(
+                    print_str + " ->   {}",
+                    *inner_idxs,
+                    get_op.res,
+                ),
+                scf.Yield(),
+            ],
+            [
+                printf.PrintFormatOp(
+                    print_str + " -> * {}",
+                    *inner_idxs,
+                    get_op.res,
+                ),
+                scf.Yield(),
+            ],
+        )
         iter_op.body.block.insert_op_before(if_op, ret)
         block.add_op(Return())
 
@@ -1003,7 +1005,12 @@ class LibBuilder:
         if verbose > 0:
             print(f"library name: {lib_path}")
         compilec.mlir_compile(
-            module, lib_path, llvm_out=llvm_out, llvm_only=llvm_only, clang_args=clang_args, verbose=verbose
+            module,
+            lib_path,
+            llvm_out=llvm_out,
+            llvm_only=llvm_only,
+            clang_args=clang_args,
+            verbose=verbose,
         )
         if llvm_only:
             return None
@@ -1024,7 +1031,9 @@ class LibBuilder:
             lib_path = lib_name
         if verbose > 0:
             print(f"library name: {lib_path}")
-        compilec.clang_compile(llvm_path, lib_path, extra_clang_args=clang_args, verbose=verbose)
+        compilec.clang_compile(
+            llvm_path, lib_path, extra_clang_args=clang_args, verbose=verbose
+        )
         function_types = {name.data: v for name, v in function_types.items()}
         return DTLCLib(lib_path, self.func_map, function_types)
 

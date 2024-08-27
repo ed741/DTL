@@ -1048,6 +1048,8 @@ class ExprTuple(Expr):
     
     def __init__(self, exprs: Sequence[ExprTypeHint], **kwargs):
         exprs = [Expr.exprInputConversion(expr) for expr in exprs]
+        exprs = IndexBinding.alignBindings(exprs,
+                                           message="Common Indices of expressions used in ExprTuple.tupleOf must all act on the same spaces")
         exprTypes = [expr.type for expr in exprs]
         DTLType.checkCommonIndices(exprTypes)
         if len(exprs)>0:
@@ -1058,8 +1060,6 @@ class ExprTuple(Expr):
 
     @staticmethod
     def tupleOf(*exprs: ExprTypeHint):
-        exprs = [Expr.exprInputConversion(expr) for expr in exprs]
-        exprs = IndexBinding.alignBindings(exprs,message="Common Indices of expressions used in ExprTuple.tupleOf must all act on the same spaces")
         return ExprTuple(exprs)
     
     @property

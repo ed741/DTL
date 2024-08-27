@@ -28,6 +28,7 @@ from xdsl.transforms.experimental.dlt import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import (
     PassByPointerRewriter,
 )
+from xdsl.transforms.experimental.dlt.dlt_pre_gen_optimisations import DLTIterateOptimiserRewriter
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
     IterationGenerator,
     _make_nested_order,
@@ -818,6 +819,18 @@ class LibBuilder:
             ),
             linkage=llvm.LinkageAttr("external"),
         )
+        memmove_func = llvm.FuncOp(
+            "memmove",
+            llvm.LLVMFunctionType(
+                [
+                    llvm.LLVMPointerType.opaque(),
+                    llvm.LLVMPointerType.opaque(),
+                    builtin.i64,
+                ],
+                None,
+            ),
+            linkage=llvm.LinkageAttr("external"),
+        )
         abort_func = llvm.FuncOp(
             "abort", llvm.LLVMFunctionType([]), linkage=llvm.LinkageAttr("external")
         )
@@ -829,7 +842,7 @@ class LibBuilder:
             ],
             self.funcs,
         )
-        module = ModuleOp([malloc_func, free_func, memcpy_func, abort_func, scope_op])
+        module = ModuleOp([malloc_func, free_func, memcpy_func, memmove_func, abort_func, scope_op])
         module.verify()
 
         if verbose > 1:
@@ -840,6 +853,15 @@ class LibBuilder:
             DTLRewriter(), walk_regions_first=False
         )
         dtl_to_dlt_applier.rewrite_module(module)
+        if verbose > 1:
+            print(module)
+        module.verify()
+
+        # DLT pre-gen-clean-up:
+        dlt_clean_up_applier = PatternRewriteWalker(
+            DLTIterateOptimiserRewriter(), walk_regions_first=False
+        )
+        dlt_clean_up_applier.rewrite_module(module)
         if verbose > 1:
             print(module)
         module.verify()
@@ -1095,6 +1117,7 @@ class LibBuilder:
             verbose=verbose,
         )
         return self.compile(module, function_types, verbose=verbose)
+
 
 
 """

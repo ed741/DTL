@@ -10,7 +10,107 @@ from xdsl.ir import Attribute
 from xdsl.printer import Printer
 from xdsl.dialects.builtin import StringAttr
 from xdsl.dialects.experimental import dlt
+from xdsl.transforms.experimental.dlt import layout_graph
+from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
 
+
+class PtrGraphPlotter:
+    @staticmethod
+    def plot_graph(layout_graph: LayoutGraph,
+                   *,
+                   ptr_types: dict[StringAttr, dlt.PtrType] = None,
+                   marked_idents: set[StringAttr] = None,
+                   name="ptr_graph",
+                   view=False,
+                   **kwargs,
+                   ):
+        """Render dlt ptr graph and write to a file.
+               """
+        if ptr_types is None:
+            ptr_types = {}
+        if marked_idents is None:
+            marked_idents = set()
+
+        graph = graphviz.Digraph(name, **kwargs)
+        node_name_idx = 0
+        ptr_names: dict[dlt.PtrType, str] = {}
+        ptr_idents: dict[StringAttr, list[str]] = {}
+        seen: set[dlt.PtrType] = set()
+        for ident, ssa_vals in layout_graph.ident_count.items():
+            if ident in ptr_types:
+                ptr_type = ptr_types[ident]
+                seen.add(ptr_type)
+                if ptr_type in ptr_names:
+                    node_name = ptr_names[ptr_type]
+                else:
+                    while (node_name := f"_{node_name_idx}") in ptr_names.values():
+                        node_name_idx += 1
+                    ptr_names[ptr_type] = node_name
+                ptr_idents.setdefault(ptr_type.identification, []).append(node_name)
+
+                label = PtrGraphPlotter.ptr_label(ptr_type, ptr_type.identification in marked_idents)
+                graph.node(node_name, label=label, shape="box")
+            else:
+                for ssa in ssa_vals:
+                    ptr_type = typing.cast(dlt.PtrType, ssa.type)
+                    assert isinstance(ptr_type, dlt.PtrType)
+                    if ptr_type in seen:
+                        continue
+                    seen.add(ptr_type)
+                    if ptr_type in ptr_names:
+                        node_name = ptr_names[ptr_type]
+                    else:
+                        while (node_name := f"_{node_name_idx}") in ptr_names.values():
+                            node_name_idx += 1
+                        ptr_names[ptr_type] = node_name
+                    ptr_idents.setdefault(ptr_type.identification, []).append(node_name)
+
+                    label = PtrGraphPlotter.ptr_label(ptr_type, ptr_type.identification in marked_idents)
+                    graph.node(node_name, label=label, shape="box")
+
+        for edge in layout_graph.edges:
+            for start_node in ptr_idents[edge.start]:
+                for end_node in ptr_idents[edge.end]:
+                    label = PtrGraphPlotter.edge_label(edge)
+                    graph.edge(start_node, end_node, label=label)
+
+        for extent_constraint in layout_graph.extent_constraints:
+            label = PtrGraphPlotter.extent_constraint_label(extent_constraint)
+            node_name = f"_ec{node_name_idx}"
+            node_name_idx += 1
+            graph.node(node_name, label=label, shape="circle")
+            for ptr_node in ptr_idents[extent_constraint.identifier]:
+                graph.edge(ptr_node, node_name)
+
+        graph.render(view=view)
+
+    @staticmethod
+    def ptr_label(ptr_type: dlt.PtrType, marked: bool) -> str:
+        ident = ptr_type.identification.data
+        rd = "*" if marked else " "
+        contents_type = _print_to_str(ptr_type.contents_type).removeprefix("!dlt.type<").removesuffix(">")
+        filled_members =  ",".join([_print_to_str(m) for m in ptr_type.filled_members])
+        filled_dimensions = ",".join([_print_to_str(d) for d in ptr_type.filled_dimensions])
+        filled_extents = ",".join([_print_to_str(e) for e in ptr_type.filled_extents])
+        return (f"{ident} {rd}\n"
+                f"{contents_type}\n"
+                f"{{{filled_members}}}\n"
+                f"[{filled_dimensions}][{filled_extents}]\n")
+
+    @staticmethod
+    def edge_label(edge: layout_graph.Edge) -> str:
+        members = ",".join([_print_to_str(m) for m in edge.members])
+        dimensions = ",".join([d.dimensionName.data for d in edge.dimensions])
+        label = f"{{{members}}}\n{{{dimensions}}}"
+        if edge.equality:
+            label += "\n *eq"
+        if edge.iteration_ident is not None:
+            label += f"\n {edge.iteration_ident.data}"
+        return label
+
+    @staticmethod
+    def extent_constraint_label(constraint: layout_graph.ExtentConstraint) -> str:
+        return _print_to_str(constraint.extent)
 
 class LayoutPlotter:
 

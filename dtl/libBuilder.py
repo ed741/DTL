@@ -16,6 +16,7 @@ from dtl import (
     Index,
 )
 from dtlpp.backends import xdsl as xdtl
+from scripts.visualiseDLT import LayoutPlotter, PtrGraphPlotter
 from xdsl import ir
 from xdsl.dialects import builtin, arith, printf, llvm, func, scf
 from xdsl.dialects.builtin import IndexType, ModuleOp, i64
@@ -28,10 +29,13 @@ from xdsl.transforms.experimental.dlt import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import (
     PassByPointerRewriter,
 )
-from xdsl.transforms.experimental.dlt.dlt_pre_gen_optimisations import DLTIterateOptimiserRewriter
+from xdsl.transforms.experimental.dlt.dlt_analysis import analyse_read_only_ptrs
+from xdsl.transforms.experimental.dlt.dlt_pre_gen_optimisations import (
+    DLTIterateOptimiserRewriter,
+)
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
     IterationGenerator,
-    _make_nested_order,
+    _make_nested_order, _make_non_zero_nested_order,
 )
 from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
 from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
@@ -66,8 +70,8 @@ def _flatten(ts: TupleStruct[_T]) -> list[_T]:
 
 @dataclass
 class FuncTypeDescriptor:
-    params: list
-    return_types: list
+    params: list[Attribute]
+    return_types: list[Attribute]
     structure: TupleStruct
 
 
@@ -842,7 +846,9 @@ class LibBuilder:
             ],
             self.funcs,
         )
-        module = ModuleOp([malloc_func, free_func, memcpy_func, memmove_func, abort_func, scope_op])
+        module = ModuleOp(
+            [malloc_func, free_func, memcpy_func, memmove_func, abort_func, scope_op]
+        )
         module.verify()
 
         if verbose > 1:
@@ -916,14 +922,15 @@ class LibBuilder:
         self,
         module: ModuleOp,
         layout_graph: LayoutGraph,
-        new_type_map: dict[builtin.StringAttr, dlt.PtrType],
+        new_type_map: dict[dlt.PtrIdent, dlt.PtrType],
+        non_zero_reducable_ptrs: set[dlt.PtrIdent],
         iteration_map: IterationMap,
-        new_order_map: dict[builtin.StringAttr, dlt.IterationOrder],
+        new_order_map: dict[dlt.IterIdent, dlt.IterationOrder],
         verbose=2,
     ):
         if verbose > 0:
             print(f"Compiling module")
-        check = layout_graph.is_consistent(new_type_map)
+        check = layout_graph.is_consistent(new_type_map, non_zero_reducable_ptrs)
         if not check:
             raise ValueError("Layout Graph has been check and found to be inconsistent")
         if verbose > 1:
@@ -1014,12 +1021,15 @@ class LibBuilder:
         self,
         module: ModuleOp,
         function_types: dict[builtin.StringAttr, func.FunctionType],
+        dlt_func_map: dict[str, FuncTypeDescriptor]=None,
         llvm_out: str = None,
         llvm_only: bool = False,
         lib_path: str = None,
         clang_args: list[str] = None,
         verbose=2,
     ) -> DTLCLib | None:
+        if dlt_func_map is None:
+            dlt_func_map = self.func_map
         if lib_path is None:
             lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
             os.close(lib_fd)
@@ -1037,16 +1047,19 @@ class LibBuilder:
         if llvm_only:
             return None
         function_types = {name.data: v for name, v in function_types.items()}
-        return DTLCLib(lib_path, self.func_map, function_types)
+        return DTLCLib(lib_path, dlt_func_map, function_types)
 
     def compile_from(
         self,
         llvm_path: str,
         function_types: dict[builtin.StringAttr, func.FunctionType],
+        dlt_func_map: dict[str, FuncTypeDescriptor] = None,
         lib_path: str = None,
         clang_args: list[str] = None,
         verbose=2,
     ) -> DTLCLib:
+        if dlt_func_map is None:
+            dlt_func_map = self.func_map
         if lib_path is None:
             lib_fd, lib_name = tempfile.mkstemp(suffix=".so")
             os.close(lib_fd)
@@ -1057,12 +1070,11 @@ class LibBuilder:
             llvm_path, lib_path, extra_clang_args=clang_args, verbose=verbose
         )
         function_types = {name.data: v for name, v in function_types.items()}
-        return DTLCLib(lib_path, self.func_map, function_types)
+        return DTLCLib(lib_path, dlt_func_map, function_types)
 
     def build(self, verbose: int = 0):
 
         module, layout_graph, iteration_map = self.prepare(verbose)
-
         # iteration_generator = IterationGenerator(iteration_map)
         # new_iter_maps = iteration_generator.generate_mappings()
         # layout_generator = LayoutGenerator(layout_graph)
@@ -1098,7 +1110,7 @@ class LibBuilder:
             # new_layout = dlt.StructLayoutAttr([new_layout])
             new_ptr = ptr.with_new_layout(new_layout, preserve_ident=True)
             new_type_map[ident] = new_ptr
-            layout_graph.propagate_type(ident, new_type_map)
+            layout_graph.propagate_type(ident, new_type_map, set())
             changed = {i for (i, ptr) in new_type_map.items() if old_type_map[i] != ptr}
             print("Propagated changes to: " + ",".join([i.data for i in changed]))
 
@@ -1107,17 +1119,58 @@ class LibBuilder:
         new_orders = {
             id: _make_nested_order(order) for id, order in new_order_map.items()
         }
+        new_orders = {
+            id: _make_non_zero_nested_order(order) for id, order in new_order_map.items()
+        }
+
+        read_only_ptrs, non_zero_reducable_ptrs = analyse_read_only_ptrs(layout_graph, iteration_map, new_orders, module)
+        # non_zero_reducable_ptrs = set()
+
+        new_type_map_reduced = dict(new_type_map)
+        layout_graph.reduce_types(non_zero_reducable_ptrs, new_type_map_reduced)
+
+        PtrGraphPlotter.plot_graph(layout_graph, ptr_types=new_type_map, marked_idents=non_zero_reducable_ptrs,
+                                   name="new_type_map", view=True)
+        PtrGraphPlotter.plot_graph(layout_graph, ptr_types=new_type_map_reduced, marked_idents=non_zero_reducable_ptrs,
+                                   name="new_type_map_reduced", view=True)
+        LayoutPlotter.plot_layout(new_type_map, name="new_type_map_layouts")
+        LayoutPlotter.plot_layout(new_type_map_reduced, name="new_type_map_reduced_layouts")
+
+        new_type_map = new_type_map_reduced
+
+        dlt_func_map = {
+            name: FuncTypeDescriptor(
+                [
+                    (
+                        new_type_map[typing.cast(dlt.PtrType, typ).identification]
+                        if isinstance(typ, dlt.PtrType)
+                        else typ
+                    )
+                    for typ in func_desc.params
+                ],
+                [
+                    (
+                        new_type_map[typing.cast(dlt.PtrType, typ).identification]
+                        if isinstance(typ, dlt.PtrType)
+                        else typ
+                    )
+                    for typ in func_desc.return_types
+                ],
+                func_desc.structure,
+            )
+            for name, func_desc in self.func_map.items()
+        }
 
         function_types = self.lower(
             module,
             layout_graph,
             new_type_map,
+            non_zero_reducable_ptrs,
             iteration_map,
             new_orders,
             verbose=verbose,
         )
-        return self.compile(module, function_types, verbose=verbose)
-
+        return self.compile(module, function_types, dlt_func_map=dlt_func_map, verbose=verbose)
 
 
 """

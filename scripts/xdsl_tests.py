@@ -3,6 +3,8 @@ import ctypes
 import time
 import timeit
 
+import numpy as np
+
 from dtl import *
 from dtl.dag import RealVectorSpace, Index
 import dtlpp.backends.xdsl as xdtl
@@ -27,8 +29,8 @@ B = TensorVariable(v10*vS, "B")
 output_t_var = TensorVariable(vQ*vS, "out")
 
 set_AB = dag.ExprTuple((Expr.exprInputConversion(2)[i:vQ, j:v10].forall(i,j), Expr.exprInputConversion(3)[j:v10, k:vS].forall(j,k)))
-matMul = (A[i,j]*(B[j,k].forall(k,j)[k,j])).sum(j).forall(i).forall(k)
-# matMul = (A[i,j]*(B[j,k])).sum(j).forall(i).forall(k)
+# matMul = (A[i,j]*(B[j,k].forall(k,j)[k,j])).sum(j).forall(i).forall(k)
+matMul = (A[i,j]*(B[j,k])).sum(j).forall(i).forall(k)
 # t1, t2, t3 = dag.ExprTuple([5, 4, 3]).tuple()
 # q_vec = (t1+t2)[j:vQ].forall(j)
 # matMul = (A[i,j]*B[j,k]+1+q_vec[i]).sum(j).forall(i).forall(k)
@@ -39,6 +41,8 @@ lib_builder.make_init("init_AB", (A,B), [vQ, vS])
 # lib_builder.make_init("init_A", A, [vQ])
 # lib_builder.make_init("init_B", B, [vS])
 lib_builder.make_setter("set_Out", output_t_var, {}, [0, 1])
+lib_builder.make_setter("set_A", A, {}, [0, 1])
+lib_builder.make_setter("set_B", B, {}, [0, 1])
 lib_builder.make_init("init_Out", output_t_var, [vQ, vS])
 lib_builder.make_print_tensorVar("print_A", A, [])
 lib_builder.make_print_tensorVar("print_B", B, [])
@@ -85,8 +89,24 @@ lib.print_B(b)
 print("out:")
 lib.print_Out(out)
 
-lib.set_AB(a,b)
+np_a = np.zeros((3, 10))
+np_b = np.zeros((10, 5))
+# lib.set_AB(a,b)
+for i in range(3):
+    for j in range(10):
+        if j % 2 == 0:
+            continue
+        lib.set_A(a, i, j, float(i+1))
+        np_a[i,j] = float(i+1)
+for j in range(10):
+    for k in range(5):
+        if j % 2 == 0:
+            continue
+        lib.set_B(b , j, k, float(k+1))
+        np_b[j, k] = float(k+1)
 print("A&B set")
+print(np_a)
+print(np_b)
 
 print("a:")
 lib.print_A(a)
@@ -94,7 +114,8 @@ print("b:")
 lib.print_B(b)
 print("out:")
 # lib.print_Out(out)
-
+np_out = np.matmul(np_a, np_b)
+print(np_out)
 
 def benchmark():
     lib.mm(out, a, b)

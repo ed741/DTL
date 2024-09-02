@@ -16,16 +16,16 @@ from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
 
 class PtrGraphPlotter:
     @staticmethod
-    def plot_graph(layout_graph: LayoutGraph,
-                   *,
-                   ptr_types: dict[StringAttr, dlt.PtrType] = None,
-                   marked_idents: set[StringAttr] = None,
-                   name="ptr_graph",
-                   view=False,
-                   **kwargs,
-                   ):
-        """Render dlt ptr graph and write to a file.
-               """
+    def plot_graph(
+        layout_graph: LayoutGraph,
+        *,
+        ptr_types: dict[StringAttr, dlt.PtrType] = None,
+        marked_idents: set[StringAttr] = None,
+        name="ptr_graph",
+        view=False,
+        **kwargs,
+    ):
+        """Render dlt ptr graph and write to a file."""
         if ptr_types is None:
             ptr_types = {}
         if marked_idents is None:
@@ -48,7 +48,9 @@ class PtrGraphPlotter:
                     ptr_names[ptr_type] = node_name
                 ptr_idents.setdefault(ptr_type.identification, []).append(node_name)
 
-                label = PtrGraphPlotter.ptr_label(ptr_type, ptr_type.identification in marked_idents)
+                label = PtrGraphPlotter.ptr_label(
+                    ptr_type, ptr_type.identification in marked_idents
+                )
                 graph.node(node_name, label=label, shape="box")
             else:
                 for ssa in ssa_vals:
@@ -65,7 +67,9 @@ class PtrGraphPlotter:
                         ptr_names[ptr_type] = node_name
                     ptr_idents.setdefault(ptr_type.identification, []).append(node_name)
 
-                    label = PtrGraphPlotter.ptr_label(ptr_type, ptr_type.identification in marked_idents)
+                    label = PtrGraphPlotter.ptr_label(
+                        ptr_type, ptr_type.identification in marked_idents
+                    )
                     graph.node(node_name, label=label, shape="box")
 
         for edge in layout_graph.edges:
@@ -88,14 +92,22 @@ class PtrGraphPlotter:
     def ptr_label(ptr_type: dlt.PtrType, marked: bool) -> str:
         ident = ptr_type.identification.data
         rd = "*" if marked else " "
-        contents_type = _print_to_str(ptr_type.contents_type).removeprefix("!dlt.type<").removesuffix(">")
-        filled_members =  ",".join([_print_to_str(m) for m in ptr_type.filled_members])
-        filled_dimensions = ",".join([_print_to_str(d) for d in ptr_type.filled_dimensions])
+        contents_type = (
+            _print_to_str(ptr_type.contents_type)
+            .removeprefix("!dlt.type<")
+            .removesuffix(">")
+        )
+        filled_members = ",".join([_print_to_str(m) for m in ptr_type.filled_members])
+        filled_dimensions = ",".join(
+            [_print_to_str(d) for d in ptr_type.filled_dimensions]
+        )
         filled_extents = ",".join([_print_to_str(e) for e in ptr_type.filled_extents])
-        return (f"{ident} {rd}\n"
-                f"{contents_type}\n"
-                f"{{{filled_members}}}\n"
-                f"[{filled_dimensions}][{filled_extents}]\n")
+        return (
+            f"{ident} {rd}\n"
+            f"{contents_type}\n"
+            f"{{{filled_members}}}\n"
+            f"[{filled_dimensions}][{filled_extents}]\n"
+        )
 
     @staticmethod
     def edge_label(edge: layout_graph.Edge) -> str:
@@ -112,24 +124,26 @@ class PtrGraphPlotter:
     def extent_constraint_label(constraint: layout_graph.ExtentConstraint) -> str:
         return _print_to_str(constraint.extent)
 
+
 class LayoutPlotter:
 
     @staticmethod
     def plot_layout(
-        layouts: dict[str|StringAttr, dlt.Layout|dlt.PtrType],
+        layouts: dict[str | StringAttr, dlt.Layout | dlt.PtrType],
         *,
         name="layout",
-        entry_points: Collection[str|StringAttr] = None,
+        entry_points: Collection[str | StringAttr] = None,
         view=False,
         coalesce_duplicates=True,
         coalesce_terminals=False,
         **kwargs,
     ):
-        """Render dlt layout and write to a file.
-        """
+        """Render dlt layout and write to a file."""
         if entry_points is None:
             entry_points = []
-        entry_points = [e.data if isinstance(e, StringAttr) else str(e) for e in entry_points]
+        entry_points = [
+            e.data if isinstance(e, StringAttr) else str(e) for e in entry_points
+        ]
 
         graph = graphviz.Digraph(name, **kwargs)
         seen = {}
@@ -146,7 +160,7 @@ class LayoutPlotter:
                 graph,
                 seen,
                 coalesce_duplicates=coalesce_duplicates,
-                coalesce_terminals=coalesce_terminals
+                coalesce_terminals=coalesce_terminals,
             )
             if name in entry_points:
                 font_size = f"{18}"
@@ -189,78 +203,125 @@ class LayoutPlotter:
     def _is_terminal(layout_node: dlt.Layout) -> bool:
         return len(layout_node.get_children()) == 0
 
-
     @functools.singledispatch
     @staticmethod
-    def get_label(layout_node: dlt.Layout) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+    def get_label(
+        layout_node: dlt.Layout,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
         raise NotImplementedError
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.PrimitiveLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
-        return {"label": _escape_text(_print_to_str(layout_node.base_type)), "shape":"diamond"}, []
+    def _(
+        layout_node: dlt.PrimitiveLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+        return {
+            "label": _escape_text(_print_to_str(layout_node.base_type)),
+            "shape": "diamond",
+        }, []
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.DenseLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
-        return {"label": _escape_text(_print_to_str(layout_node.dimension)), "shape":"box"}, [(layout_node.child, "", "")]
+    def _(
+        layout_node: dlt.DenseLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+        return {
+            "label": _escape_text(_print_to_str(layout_node.dimension)),
+            "shape": "box",
+        }, [(layout_node.child, "", "")]
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.MemberLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
-        return {"label": _escape_text(_print_to_str(layout_node.member_specifier)), "shape":"parallelogram"}, [(layout_node.child, "", "")]
+    def _(
+        layout_node: dlt.MemberLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+        return {
+            "label": _escape_text(_print_to_str(layout_node.member_specifier)),
+            "shape": "parallelogram",
+        }, [(layout_node.child, "", "")]
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.ArithReplaceLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+    def _(
+        layout_node: dlt.ArithReplaceLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
         replacements = []
         for r in layout_node.replacements:
-            replacements.append(f"{_print_to_str(r.outer_dimension)} & {_print_to_str(r.inner_member)}")
-        return {"label": _escape_text(_print_to_str(layout_node.inner_dimension()) + " \n " + "\n".join(replacements)), "shape":"box"}, [(layout_node.child, "", "")]
+            replacements.append(
+                f"{_print_to_str(r.outer_dimension)} & {_print_to_str(r.inner_member)}"
+            )
+        return {
+            "label": _escape_text(
+                _print_to_str(layout_node.inner_dimension())
+                + " \n "
+                + "\n".join(replacements)
+            ),
+            "shape": "box",
+        }, [(layout_node.child, "", "")]
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.StructLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+    def _(
+        layout_node: dlt.StructLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
         labels = []
         children_edges = []
         for idx, child in enumerate(layout_node.children):
             labels.append(f"<f{idx}> {idx}")
             children_edges.append((child, "", f"f{idx}"))
-        return {"label": "|".join(labels), "shape":"record"}, children_edges
+        return {"label": "|".join(labels), "shape": "record"}, children_edges
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.AbstractLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+    def _(
+        layout_node: dlt.AbstractLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
         labels = []
         children_edges = []
         for idx, child in enumerate(layout_node.children):
-            member_record = "{" + ", ".join([_print_to_str(m) for m in child.member_specifiers]) + "}"
-            dim_record = "[" + ", ".join([_print_to_str(d) for d in child.dimensions]) + "]"
+            member_record = (
+                "{"
+                + ", ".join([_print_to_str(m) for m in child.member_specifiers])
+                + "}"
+            )
+            dim_record = (
+                "[" + ", ".join([_print_to_str(d) for d in child.dimensions]) + "]"
+            )
             label = f"<f{idx}> {_escape_text(member_record)} {_escape_text(dim_record)}"
             labels.append(label)
             children_edges.append((child.child, "", f"f{idx}"))
-        return {"label": "|".join(labels), "shape":"record"}, children_edges
+        return {"label": "|".join(labels), "shape": "record"}, children_edges
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.IndexingLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+    def _(
+        layout_node: dlt.IndexingLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
         children_edges = []
-        label  = "<f0> sparse | <f1> direct"
+        label = "<f0> sparse | <f1> direct"
         children_edges.append((layout_node.indexedChild, "", "f0"))
         children_edges.append((layout_node.directChild, "", "f1"))
-        return {"label": label, "shape":"record"}, children_edges
+        return {"label": label, "shape": "record"}, children_edges
 
     @get_label.register
     @staticmethod
-    def _(layout_node: dlt.UnpackedCOOLayoutAttr) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
-        label = _escape_text("UpCOO: ["+ ",".join([_print_to_str(dim) for dim in layout_node.dimensions]) + "]")
-        return {"label": label, "shape":"doubleoctagon"}, [(layout_node.child, "", "")]
+    def _(
+        layout_node: dlt.UnpackedCOOLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+        label = _escape_text(
+            "UpCOO: ["
+            + ",".join([_print_to_str(dim) for dim in layout_node.dimensions])
+            + "]"
+        )
+        return {"label": label, "shape": "doubleoctagon"}, [(layout_node.child, "", "")]
 
 
 class IterationPlotter:
 
-    def __init__(self, iteration_ops: set[dlt.IterateOp] = None,):
-
+    def __init__(
+        self,
+        iteration_ops: set[dlt.IterateOp] = None,
+    ):
 
         self.iteration_ops = iteration_ops
         self.bodies = {}
@@ -288,19 +349,19 @@ class IterationPlotter:
     @staticmethod
     def _body_name_for(op: dlt.IterateOp) -> str:
         if op.identification.data == "":
-            return str(id(op))+".body"
+            return str(id(op)) + ".body"
         else:
             return op.identification.data + ".body"
 
-    def plot(self,
-            iteration_orders: dict[str | StringAttr, dlt.IterationOrder | dlt.IterateOp],
-            *,
-            plot_name="iteration",
-            view=False,
-            **kwargs,
+    def plot(
+        self,
+        iteration_orders: dict[str | StringAttr, dlt.IterationOrder | dlt.IterateOp],
+        *,
+        plot_name="iteration",
+        view=False,
+        **kwargs,
     ):
-        """Render dlt iterations and write to a file.
-        """
+        """Render dlt iterations and write to a file."""
         _iteration_orders = {}
         for name, order in iteration_orders.items():
             if isinstance(name, StringAttr):
@@ -327,23 +388,43 @@ class IterationPlotter:
 
         graph.render(view=view)
 
-
     @functools.singledispatchmethod
-    def _plot_node(self, iteration_node: dlt.IterationOrder, graph: graphviz.Digraph, op: dlt.IterateOp) -> str:
+    def _plot_node(
+        self,
+        iteration_node: dlt.IterationOrder,
+        graph: graphviz.Digraph,
+        op: dlt.IterateOp,
+    ) -> str:
         raise NotImplementedError(type(iteration_node))
 
     @_plot_node.register
-    def _(self, iteration_node: dlt.BodyIterationOrderAttr, graph: graphviz.Digraph, op: dlt.IterateOp) -> str:
+    def _(
+        self,
+        iteration_node: dlt.BodyIterationOrderAttr,
+        graph: graphviz.Digraph,
+        op: dlt.IterateOp,
+    ) -> str:
         name = IterationPlotter._body_name_for(op)
         return name
 
     @_plot_node.register
-    def _(self, iteration_node: dlt.NestedIterationOrderAttr, graph: graphviz.Digraph, op: dlt.IterateOp) -> str:
+    def _(
+        self,
+        iteration_node: dlt.NestedIterationOrderAttr,
+        graph: graphviz.Digraph,
+        op: dlt.IterateOp,
+    ) -> str:
         name = IterationPlotter._body_name_for(op) + str(id(iteration_node))
         extent_idx = iteration_node.extent_index.data
         extent = op.extents.data[extent_idx]
-        label = _print_to_str(extent)
-        dims = [ptr.type.identification.data + ":" + ",".join([dim.dimensionName.data for dim in dim_spec.data[extent_idx]]) for ptr, dim_spec in zip(op.tensors, op.dimensions) if len(dim_spec.data[extent_idx]) > 0]
+        label = "Nested\n" + _print_to_str(extent)
+        dims = [
+            ptr.type.identification.data
+            + ":"
+            + ",".join([dim.dimensionName.data for dim in dim_spec.data[extent_idx]])
+            for ptr, dim_spec in zip(op.tensors, op.dimensions)
+            if len(dim_spec.data[extent_idx]) > 0
+        ]
         if len(dims) > 0:
             label += "\n" + "\n".join(dims)
 
@@ -356,14 +437,75 @@ class IterationPlotter:
         return name
 
     @_plot_node.register
-    def _(self, iteration_node: dlt.AbstractIterationOrderAttr, graph: graphviz.Digraph, op: dlt.IterateOp) -> str:
+    def _(
+        self,
+        iteration_node: dlt.NonZeroIterationOrderAttr,
+        graph: graphviz.Digraph,
+        op: dlt.IterateOp,
+    ) -> str:
+        name = IterationPlotter._body_name_for(op) + str(id(iteration_node))
+        label = "NonZeroIter:"
+        for extent_idx in iteration_node.extent_indices:
+            extent_idx = extent_idx.data
+            extent = op.extents.data[extent_idx]
+            ex_label = _print_to_str(extent)
+            dims = [
+                ptr.type.identification.data
+                + ":"
+                + ",".join(
+                    [dim.dimensionName.data for dim in dim_spec.data[extent_idx]]
+                )
+                + ("*" if t_idx == iteration_node.tensor_index.data else "")
+                for t_idx, (ptr, dim_spec) in enumerate(zip(op.tensors, op.dimensions))
+                if len(dim_spec.data[extent_idx]) > 0
+            ]
+            if len(dims) > 0:
+                ex_label += "\n" + "\n".join(dims)
+            label += "\n" + ex_label
+
+        kwargs = {}
+        if op not in self.iteration_ops:
+            kwargs["color"] = "grey"
+        graph.node(name, label=label, shape="invhouse", **kwargs)
+        child = self._plot_node(iteration_node.child, graph, op)
+        graph.edge(name, child)
+        return name
+
+    @_plot_node.register
+    def _(
+        self,
+        iteration_node: dlt.AbstractIterationOrderAttr,
+        graph: graphviz.Digraph,
+        op: dlt.IterateOp,
+    ) -> str:
         name = IterationPlotter._body_name_for(op) + str(id(iteration_node))
         label = "Abstract:"
         for extent_idx in iteration_node.extent_indices:
             extent_idx = extent_idx.data
             extent = op.extents.data[extent_idx]
             ex_label = _print_to_str(extent)
-            dims = [ptr.type.identification.data + ":" + ",".join([dim.dimensionName.data for dim in dim_spec.data[extent_idx]]) for ptr, dim_spec in zip(op.tensors, op.dimensions) if len(dim_spec.data[extent_idx]) > 0]
+            dims = [
+                ptr.type.identification.data
+                + ":"
+                + ",".join(
+                    [dim.dimensionName.data for dim in dim_spec.data[extent_idx]]
+                )
+                + (
+                    "*"
+                    if t_idx
+                    in [t.data for t in iteration_node.non_zero_reducible_tensors]
+                    and extent_idx
+                    in [
+                        e.data
+                        for e in iteration_node.non_zero_reducible_tensor_extents.data[
+                            t_idx
+                        ]
+                    ]
+                    else ""
+                )
+                for t_idx, (ptr, dim_spec) in enumerate(zip(op.tensors, op.dimensions))
+                if len(dim_spec.data[extent_idx]) > 0
+            ]
             if len(dims) > 0:
                 ex_label += "\n" + "\n".join(dims)
             label += "\n" + ex_label
@@ -377,9 +519,16 @@ class IterationPlotter:
         return name
 
 
-
 def _escape_text(text: str) -> str:
-    return text.replace("[", "\\[").replace("]", "\\]").replace("{", "\\{").replace("}", "\\}").replace("|", "\\|").replace("<", "\\<").replace(">", "\\>")
+    return (
+        text.replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("{", "\\{")
+        .replace("}", "\\}")
+        .replace("|", "\\|")
+        .replace("<", "\\<")
+        .replace(">", "\\>")
+    )
 
 
 def _print_to_str(attr: Attribute) -> str:

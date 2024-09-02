@@ -31,7 +31,18 @@ class MatMul(Benchmark, abc.ABC):
         np_a, np_b = self.make_a_b(r)
 
         # print("generating np c")
-        np_c = np.matmul(np_a, np_b)
+        np_c = np.matmul(np_a, np_b, dtype=np.float32, casting="no")
+        # np_d = np.zeros_like(np_c)
+        # for i_i in range(self.i):
+        #     for i_k in range(self.k):
+        #         for i_j in range(self.j):
+        #             _a = np_a[i_i, i_j]
+        #             _b = np_b[i_j, i_k]
+        #             prod = _a * _b
+        #             _d = np_d[i_i, i_k]
+        #             sum = _d + prod
+        #             np_d[i_i, i_k] = sum
+        # self.np_d = np_d
 
         self.np_a = np_a
         self.np_b = np_b
@@ -108,6 +119,8 @@ class MatMul(Benchmark, abc.ABC):
             for i_k in range(self.np_b.shape[1]):
                 if self.np_b[i_j, i_k] != 0:
                     lib.set_B(b, i_j, i_k, self.np_b[i_j, i_k])
+
+        matmul_func = lib.matmul # force the runtime to load and prepare the function (so it's cached)
         return root, a, b, c
 
     def get_benchmark(self, lib: DTLCLib) -> typing.Callable[[_Args], None]:
@@ -130,9 +143,10 @@ class MatMul(Benchmark, abc.ABC):
                 res = lib.get_C(c, i_i, i_k).value
                 error = abs(res - np_num)
                 total_error += error
-                if error > self.epsilon:
+                normalised_epsilon = np_num * self.epsilon
+                if error > normalised_epsilon:
                     print(
-                        f"Result miss match! at i: {i_i}, k: {i_k}, np_c = {np_num}, c = {res}, error = {res - np_num}")
+                        f"Result miss match! at i: {i_i}, k: {i_k}, np_c = {np_num}, c = {res}, error = {res - np_num}, epsilon(abs) = {self.epsilon}, epsilon(norm) = {normalised_epsilon}")
                     within_epsilon = False
                 first_res = lib.get_C(f_c, i_i, i_k).value
                 if res != first_res:
@@ -220,12 +234,12 @@ class RandomSparseSingles(StaticSingles):
         np_b = np.zeros((self.j, self.k), dtype=np.float32)
         for i_i in range(self.i):
             for i_j in range(self.j):
-                if r.random() >= self.rate_a:
+                if r.random() < self.rate_a:
                     num = r.random()
                     np_a[i_i, i_j] = num
         for i_j in range(self.j):
             for i_k in range(self.k):
-                if r.random() >= self.rate_b:
+                if r.random() < self.rate_b:
                     num = r.random()
                     np_b[i_j, i_k] = num
         return np_a, np_b
@@ -268,14 +282,17 @@ if __name__ == '__main__':
     benchmarks.append(StaticPair(8, 8, 8, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
     benchmarks.append(StaticSingles(8, 8, 8, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 
-    # for benchmark in benchmarks:
-    #     benchmark.skip_testing = True
-    #     # benchmark.only_compile_to_llvm = True
-    #     # benchmark.take_first_layouts = 5
-    #     # benchmark.take_first_orders = 5
-    #     benchmark.run()
-    #     benchmark.skip_testing = False
-    #     benchmark.only_compile_to_llvm = False
+    # benchmarks.append(
+    #     RandomSparseSingles(1024, 1024, 1024, False, 0, 1, 1,"./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+
+    for benchmark in benchmarks:
+        benchmark.skip_testing = True
+        # benchmark.only_compile_to_llvm = True
+        # benchmark.take_first_layouts = 5
+        # benchmark.take_first_orders = 5
+        benchmark.run()
+        benchmark.skip_testing = False
+        benchmark.only_compile_to_llvm = False
 
     for benchmark in benchmarks:
         benchmark.run()

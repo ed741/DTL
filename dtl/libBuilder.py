@@ -19,7 +19,7 @@ from dtlpp.backends import xdsl as xdtl
 from scripts.visualiseDLT import LayoutPlotter, PtrGraphPlotter
 from xdsl import ir
 from xdsl.dialects import builtin, arith, printf, llvm, func, scf
-from xdsl.dialects.builtin import IndexType, ModuleOp, i64
+from xdsl.dialects.builtin import FunctionType, IndexType, ModuleOp, StringAttr, i64
 from xdsl.dialects.experimental import dlt
 from xdsl.dialects.func import Return, FuncOp
 from xdsl.ir import Attribute, Region, MLContext, TypeAttribute
@@ -32,10 +32,12 @@ from xdsl.transforms.experimental.convert_return_to_pointer_arg import (
 from xdsl.transforms.experimental.dlt.dlt_analysis import analyse_read_only_ptrs
 from xdsl.transforms.experimental.dlt.dlt_pre_gen_optimisations import (
     DLTIterateOptimiserRewriter,
+    DLTSetIterationOpNonZeroLoopsRewriter,
 )
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
     IterationGenerator,
-    _make_nested_order, _make_non_zero_nested_order,
+    _make_nested_order,
+    _make_non_zero_nested_order,
 )
 from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
 from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
@@ -868,6 +870,12 @@ class LibBuilder:
             DLTIterateOptimiserRewriter(), walk_regions_first=False
         )
         dlt_clean_up_applier.rewrite_module(module)
+
+        dlt_set_non_zero_loops = PatternRewriteWalker(
+            DLTSetIterationOpNonZeroLoopsRewriter(), walk_regions_first=False
+        )
+        dlt_set_non_zero_loops.rewrite_module(module)
+
         if verbose > 1:
             print(module)
         module.verify()
@@ -923,16 +931,58 @@ class LibBuilder:
         module: ModuleOp,
         layout_graph: LayoutGraph,
         new_type_map: dict[dlt.PtrIdent, dlt.PtrType],
-        non_zero_reducable_ptrs: set[dlt.PtrIdent],
         iteration_map: IterationMap,
         new_order_map: dict[dlt.IterIdent, dlt.IterationOrder],
+        graph_dir: str = None,
         verbose=2,
-    ):
+    ) -> tuple[dict[StringAttr, FunctionType], dict[str, FuncTypeDescriptor]]:
+        if verbose > 0:
+            print(f"Reducing ptr types")
+
+        read_only_ptrs, non_zero_reducable_ptrs = analyse_read_only_ptrs(
+            layout_graph, iteration_map, new_order_map, module
+        )
+        layout_graph.reduce_types(non_zero_reducable_ptrs, new_type_map)
+
+        if verbose > 0:
+            print(f"getting updated dlt_func_map")
+        dlt_func_map = {
+            name: FuncTypeDescriptor(
+                [
+                    (
+                        new_type_map[typing.cast(dlt.PtrType, typ).identification]
+                        if isinstance(typ, dlt.PtrType)
+                        else typ
+                    )
+                    for typ in func_desc.params
+                ],
+                [
+                    (
+                        new_type_map[typing.cast(dlt.PtrType, typ).identification]
+                        if isinstance(typ, dlt.PtrType)
+                        else typ
+                    )
+                    for typ in func_desc.return_types
+                ],
+                func_desc.structure,
+            )
+            for name, func_desc in self.func_map.items()
+        }
+
+
         if verbose > 0:
             print(f"Compiling module")
         check = layout_graph.is_consistent(new_type_map, non_zero_reducable_ptrs)
         if not check:
             raise ValueError("Layout Graph has been check and found to be inconsistent")
+
+        if graph_dir != None:
+            PtrGraphPlotter.plot_graph(layout_graph, ptr_types=new_type_map, marked_idents=non_zero_reducable_ptrs,
+                                       name="ptr_graph", directory=graph_dir)
+            LayoutPlotter.plot_layout(new_type_map, name="layouts", entry_points=set(layout_graph.get_entry_layouts()),
+                                      directory=graph_dir)
+
+
         if verbose > 1:
             print("making dlt.ptr type updating pass")
         rewriter = layout_graph.use_types(new_type_map)
@@ -1015,13 +1065,13 @@ class LibBuilder:
 
         if verbose > 1:
             print(module)
-        return function_types
+        return function_types, dlt_func_map
 
     def compile(
         self,
         module: ModuleOp,
         function_types: dict[builtin.StringAttr, func.FunctionType],
-        dlt_func_map: dict[str, FuncTypeDescriptor]=None,
+        dlt_func_map: dict[str, FuncTypeDescriptor] = None,
         llvm_out: str = None,
         llvm_only: bool = False,
         lib_path: str = None,
@@ -1116,61 +1166,31 @@ class LibBuilder:
 
         original_order_map = iteration_map.get_map()
         new_order_map = original_order_map.copy()
+        # new_orders = {
+        #     id: _make_nested_order(order) for id, order in new_order_map.items()
+        # }
         new_orders = {
-            id: _make_nested_order(order) for id, order in new_order_map.items()
+            id: _make_non_zero_nested_order(order)
+            for id, order in new_order_map.items()
         }
-        new_orders = {
-            id: _make_non_zero_nested_order(order) for id, order in new_order_map.items()
-        }
+        # PtrGraphPlotter.plot_graph(layout_graph, ptr_types=new_type_map, marked_idents=non_zero_reducable_ptrs,
+        #                            name="new_type_map", view=True)
+        # PtrGraphPlotter.plot_graph(layout_graph, ptr_types=new_type_map_reduced, marked_idents=non_zero_reducable_ptrs,
+        #                            name="new_type_map_reduced", view=True)
+        # LayoutPlotter.plot_layout(new_type_map, name="new_type_map_layouts")
+        # LayoutPlotter.plot_layout(new_type_map_reduced, name="new_type_map_reduced_layouts")
 
-        read_only_ptrs, non_zero_reducable_ptrs = analyse_read_only_ptrs(layout_graph, iteration_map, new_orders, module)
-        # non_zero_reducable_ptrs = set()
-
-        new_type_map_reduced = dict(new_type_map)
-        layout_graph.reduce_types(non_zero_reducable_ptrs, new_type_map_reduced)
-
-        PtrGraphPlotter.plot_graph(layout_graph, ptr_types=new_type_map, marked_idents=non_zero_reducable_ptrs,
-                                   name="new_type_map", view=True)
-        PtrGraphPlotter.plot_graph(layout_graph, ptr_types=new_type_map_reduced, marked_idents=non_zero_reducable_ptrs,
-                                   name="new_type_map_reduced", view=True)
-        LayoutPlotter.plot_layout(new_type_map, name="new_type_map_layouts")
-        LayoutPlotter.plot_layout(new_type_map_reduced, name="new_type_map_reduced_layouts")
-
-        new_type_map = new_type_map_reduced
-
-        dlt_func_map = {
-            name: FuncTypeDescriptor(
-                [
-                    (
-                        new_type_map[typing.cast(dlt.PtrType, typ).identification]
-                        if isinstance(typ, dlt.PtrType)
-                        else typ
-                    )
-                    for typ in func_desc.params
-                ],
-                [
-                    (
-                        new_type_map[typing.cast(dlt.PtrType, typ).identification]
-                        if isinstance(typ, dlt.PtrType)
-                        else typ
-                    )
-                    for typ in func_desc.return_types
-                ],
-                func_desc.structure,
-            )
-            for name, func_desc in self.func_map.items()
-        }
-
-        function_types = self.lower(
+        function_types, dlt_func_map = self.lower(
             module,
             layout_graph,
             new_type_map,
-            non_zero_reducable_ptrs,
             iteration_map,
             new_orders,
             verbose=verbose,
         )
-        return self.compile(module, function_types, dlt_func_map=dlt_func_map, verbose=verbose)
+        return self.compile(
+            module, function_types, dlt_func_map=dlt_func_map, verbose=verbose
+        )
 
 
 """

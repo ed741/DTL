@@ -16,7 +16,7 @@ from dtl import (
     Index,
 )
 from dtlpp.backends import xdsl as xdtl
-from scripts.visualiseDLT import LayoutPlotter, PtrGraphPlotter
+from dtl.visualise import LayoutPlotter, PtrGraphPlotter
 from xdsl import ir
 from xdsl.dialects import builtin, arith, printf, llvm, func, scf
 from xdsl.dialects.builtin import FunctionType, IndexType, ModuleOp, StringAttr, i64
@@ -501,6 +501,13 @@ class LibBuilder:
                 )
             ], [op.res]
 
+    def get_base_version_for_ptr(self, ptr_type: dlt.PtrType) -> dlt.PtrType:
+        base_ptr_type = ptr_type.as_base()
+        base_ptr_type = ptr_type.as_base().with_identification(
+            "R_" + base_ptr_type.identification.data
+        )
+        return base_ptr_type
+
     def make_init(
         self,
         name: str,
@@ -509,10 +516,7 @@ class LibBuilder:
         free_name: str = None,
     ):
         ptr_type, elements = self._get_tensor_var_info(tensor_vars)
-        base_ptr_type = ptr_type.as_base()
-        base_ptr_type = ptr_type.as_base().with_identification(
-            "R_" + base_ptr_type.identification.data
-        )
+        base_ptr_type = self.get_base_version_for_ptr(ptr_type)
         block = ir.Block()
         arg_idx = 0
         extents_map = {}

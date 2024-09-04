@@ -6,8 +6,8 @@ from benchmarking.benchmark import Benchmark
 from dtl import *
 from dtl.dag import RealVectorSpace, Index
 
-from dtl.libBuilder import DTLCLib, LibBuilder, StructType
-
+from dtl.libBuilder import DTLCLib, LibBuilder, StructType, TupleStruct
+from xdsl.transforms.experimental.dlt.generate_dlt_layouts import ReifyConfig
 
 _Epsilon = 0.00001
 
@@ -48,6 +48,8 @@ class MatMul(Benchmark, abc.ABC):
         self.np_b = np_b
         self.np_c = np_c
 
+        self.tensor_variables = None
+
         self.handle_reference_array(np_a, "np_a")
         self.handle_reference_array(np_b, "np_b")
         self.handle_reference_array(np_c, "np_c")
@@ -70,6 +72,14 @@ class MatMul(Benchmark, abc.ABC):
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        raise NotImplementedError
+
+    def get_configs_for_DTL_tensors(self) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        assert self.tensor_variables is not None
+        return self.get_configs_for_tensors(*self.tensor_variables)
+
     def define_lib_builder(self) -> LibBuilder:
         if self.use_scope_vars:
             vi = UnknownSizeVectorSpace("vi")
@@ -84,6 +94,8 @@ class MatMul(Benchmark, abc.ABC):
         A = TensorVariable(vi * vj, "A")
         B = TensorVariable(vj * vk, "B")
         C = TensorVariable(vi * vk, "C")
+
+        self.tensor_variables = (A,B,C)
 
         _i = Index('i')
         _j = Index('j')
@@ -166,6 +178,8 @@ class StaticTriple(MatMul):
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
         lib_builder.make_init("init", (a, b, c), [], free_name="dealloc")
 
+    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        return {(a,b,c): ReifyConfig()}
 
     def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
         root, (a, b, c) = lib.init()
@@ -185,6 +199,10 @@ class StaticPair(MatMul):
     def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
         lib_builder.make_init("init_AB", (a, b), [], free_name="dealloc_AB")
         lib_builder.make_init("init_C", (c), [], free_name="dealloc_C")
+
+    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        return {(a,b): ReifyConfig(coo_buffer_options=frozenset([0])),
+                c: ReifyConfig()}
 
     def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
         root_ab, (a, b) = lib.init_AB()
@@ -208,6 +226,11 @@ class StaticSingles(MatMul):
         lib_builder.make_init("init_A", (a), [], free_name="dealloc_A")
         lib_builder.make_init("init_B", (b), [], free_name="dealloc_B")
         lib_builder.make_init("init_C", (c), [], free_name="dealloc_C")
+
+    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        return {a: ReifyConfig(coo_buffer_options=frozenset([0])),
+                b: ReifyConfig(coo_buffer_options=frozenset([0])),
+                c: ReifyConfig()}
 
     def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
         root_a, (a) = lib.init_A()

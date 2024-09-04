@@ -9,9 +9,9 @@ from io import StringIO
 
 import nptyping
 import numpy as np
-from typing_extensions import override
 
-from dtl.libBuilder import DTLCLib, LibBuilder
+from dtl import TensorVariable
+from dtl.libBuilder import DTLCLib, LibBuilder, TupleStruct
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.printer import Printer
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
@@ -20,7 +20,7 @@ from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
 )
 from xdsl.transforms.experimental.dlt.generate_dlt_layouts import (
     LayoutGenerator,
-    PtrMapping,
+    PtrMapping, ReifyConfig,
 )
 from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
 from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
@@ -99,6 +99,10 @@ class Benchmark(abc.ABC):
 
     @abc.abstractmethod
     def define_lib_builder(self) -> LibBuilder:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_configs_for_DTL_tensors(self) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -271,7 +275,7 @@ class Benchmark(abc.ABC):
         print(
             f"{datetime.datetime.now()} Generating possible layouts and iteration maps"
         )
-        layouts, orders = self._generate_versions(layout_graph, iteration_map)
+        layouts, orders = self._generate_versions(layout_graph, iteration_map, lib_builder)
         if self.only_generate:
             print("Only Generate is set, so benchmarking is ending.")
             return
@@ -526,7 +530,7 @@ class Benchmark(abc.ABC):
         return result, total_within_epsilon, mean_error, total_bitwise_consistent
 
     def _generate_versions(
-        self, layout_graph: LayoutGraph, iteration_map: IterationMap
+        self, layout_graph: LayoutGraph, iteration_map: IterationMap, lib_builder: LibBuilder,
     ) -> tuple[list[PtrMapping], list[IterationMapping]]:
 
         layout_store_keys = f"{self.layout_store}/keys"
@@ -560,8 +564,19 @@ class Benchmark(abc.ABC):
             print(
                 f"No matching layout graph found after checking {count} graphs. Generating from scratch as {new_key}"
             )
+
+            dtl_config_map: dict[TupleStruct[TensorVariable], ReifyConfig] = self.get_configs_for_DTL_tensors()
+            config_map = {}
+            for tensor_var, config in dtl_config_map.items():
+                assert tensor_var in lib_builder.tensor_var_details
+                ident = lib_builder.get_base_version_for_ptr(lib_builder.tensor_var_details[tensor_var]).identification
+                closure = layout_graph.get_transitive_closure(ident)
+                for i in closure:
+                    assert i not in config_map
+                    config_map[i] = config
+
             new_layouts = LayoutGenerator(
-                layout_graph, plot_dir=f"{self.layout_store}/gen/{new_key}"
+                layout_graph, config_map, plot_dir=f"{self.layout_store}/gen/{new_key}"
             ).generate_mappings(take_first=self.take_first_layouts)
             print("Writing new layouts to pickle")
             with open(f"{layout_store_values}/{new_key}", "wb") as f:

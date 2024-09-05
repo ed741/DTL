@@ -601,7 +601,7 @@ if __name__ == "__main__":
         )
     # if len(sys.argv) == 1 or "10" in sys.argv:
     #     benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    if len(sys.argv) == 1 or "1" in sys.argv:
+    if len(sys.argv) == 1 or "11" in sys.argv:
         benchmarks.append(
             StaticPair(
                 8,

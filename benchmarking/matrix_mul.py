@@ -1,3 +1,4 @@
+import sys
 from random import Random
 
 import numpy as np
@@ -15,15 +16,38 @@ _Args = tuple[Any, StructType, StructType, StructType]
 
 
 class MatMul(Benchmark, abc.ABC):
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, opt_num: int, epsilon: float):
+    def __init__(
+        self,
+        i: int,
+        j: int,
+        k: int,
+        use_scope_vars: bool,
+        seed: int,
+        base_dir: str,
+        name: str,
+        runs: int,
+        repeats: int,
+        opt_num: int,
+        epsilon: float,
+    ):
         var_name = "scope" if use_scope_vars else "static"
         new_base_dir = f"{base_dir}/matmul"
-        results_base_dir = f"{new_base_dir}/{name}_{var_name}_O{opt_num}_{i}.{j}.{k}_{seed}_{runs}"
+        results_base_dir = (
+            f"{new_base_dir}/{name}_{var_name}_O{opt_num}_{i}.{j}.{k}_{seed}_{runs}"
+        )
 
         self.i, self.j, self.k = i, j, k
         self.seed = seed
         self.use_scope_vars = use_scope_vars
-        super().__init__(results_base_dir, f"{new_base_dir}/layouts", f"{new_base_dir}/orders", runs, repeats, opt_num, epsilon)
+        super().__init__(
+            results_base_dir,
+            f"{new_base_dir}/layouts",
+            f"{new_base_dir}/orders",
+            runs,
+            repeats,
+            opt_num,
+            epsilon,
+        )
 
         # print("setting random values in np a & b")
         r = Random(seed)
@@ -67,16 +91,25 @@ class MatMul(Benchmark, abc.ABC):
                 np_b[i_j, i_k] = num
         return np_a, np_b
 
-
     @abc.abstractmethod
-    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+    def construct_lib_builder(
+        self,
+        lib_builder: LibBuilder,
+        a: TensorVariable,
+        b: TensorVariable,
+        c: TensorVariable,
+    ):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+    def get_configs_for_tensors(
+        self, a: TensorVariable, b: TensorVariable, c: TensorVariable
+    ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         raise NotImplementedError
 
-    def get_configs_for_DTL_tensors(self) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+    def get_configs_for_DTL_tensors(
+        self,
+    ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         assert self.tensor_variables is not None
         return self.get_configs_for_tensors(*self.tensor_variables)
 
@@ -95,13 +128,12 @@ class MatMul(Benchmark, abc.ABC):
         B = TensorVariable(vj * vk, "B")
         C = TensorVariable(vi * vk, "C")
 
-        self.tensor_variables = (A,B,C)
+        self.tensor_variables = (A, B, C)
 
-        _i = Index('i')
-        _j = Index('j')
-        _k = Index('k')
+        _i = Index("i")
+        _j = Index("j")
+        _k = Index("k")
         matmul = (A[_i, _j] * B[_j, _k]).sum(_j).forall(_i, _k)
-
 
         lib_builder = LibBuilder(scope_var_map)
         self.construct_lib_builder(lib_builder, A, B, C)
@@ -114,9 +146,10 @@ class MatMul(Benchmark, abc.ABC):
 
         return lib_builder
 
-
     @abc.abstractmethod
-    def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
+    def init_layouts(
+        self, lib: DTLCLib
+    ) -> tuple[Any, StructType, StructType, StructType]:
         raise NotImplementedError
 
     def setup(self, lib: DTLCLib) -> _Args:
@@ -132,7 +165,9 @@ class MatMul(Benchmark, abc.ABC):
                 if self.np_b[i_j, i_k] != 0:
                     lib.set_B(b, i_j, i_k, self.np_b[i_j, i_k])
 
-        matmul_func = lib.matmul # force the runtime to load and prepare the function (so it's cached)
+        matmul_func = (
+            lib.matmul
+        )  # force the runtime to load and prepare the function (so it's cached)
         return root, a, b, c
 
     def get_benchmark(self, lib: DTLCLib) -> typing.Callable[[_Args], None]:
@@ -142,7 +177,9 @@ class MatMul(Benchmark, abc.ABC):
 
         return benchmark
 
-    def test(self, lib: DTLCLib, args: _Args, first_args: _Args) -> tuple[bool, float, bool]: # (within_epsilon, mean_error, bit_wise_reapeatable)
+    def test(
+        self, lib: DTLCLib, args: _Args, first_args: _Args
+    ) -> tuple[bool, float, bool]:  # (within_epsilon, mean_error, bit_wise_reapeatable)
         root, a, b, c = args
         f_root, f_a, f_b, f_c = first_args
         within_epsilon = True
@@ -158,12 +195,14 @@ class MatMul(Benchmark, abc.ABC):
                 normalised_epsilon = np_num * self.epsilon
                 if error > normalised_epsilon:
                     print(
-                        f"Result miss match! at i: {i_i}, k: {i_k}, np_c = {np_num}, c = {res}, error = {res - np_num}, epsilon(abs) = {self.epsilon}, epsilon(norm) = {normalised_epsilon}")
+                        f"Result miss match! at i: {i_i}, k: {i_k}, np_c = {np_num}, c = {res}, error = {res - np_num}, epsilon(abs) = {self.epsilon}, epsilon(norm) = {normalised_epsilon}"
+                    )
                     within_epsilon = False
                 first_res = lib.get_C(f_c, i_i, i_k).value
                 if res != first_res:
                     print(
-                        f"Result does not match previous result at i: {i_i}, k: {i_k}. first result: {first_res}, this result: {res}")
+                        f"Result does not match previous result at i: {i_i}, k: {i_k}. first result: {first_res}, this result: {res}"
+                    )
                     bitwise_consistency = False
 
         return within_epsilon, total_error, bitwise_consistency
@@ -171,17 +210,52 @@ class MatMul(Benchmark, abc.ABC):
 
 class StaticTriple(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+    def __init__(
+        self,
+        i: int,
+        j: int,
+        k: int,
+        use_scope_vars: bool,
+        seed: int,
+        base_dir: str,
+        name: str,
+        runs: int,
+        repeats: int,
+        opt_level: int,
+        epsilon: float,
+    ):
         name = f"triple_{name}"
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
+        super().__init__(
+            i,
+            j,
+            k,
+            use_scope_vars,
+            seed,
+            base_dir,
+            name,
+            runs,
+            repeats,
+            opt_level,
+            epsilon,
+        )
 
-    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+    def construct_lib_builder(
+        self,
+        lib_builder: LibBuilder,
+        a: TensorVariable,
+        b: TensorVariable,
+        c: TensorVariable,
+    ):
         lib_builder.make_init("init", (a, b, c), [], free_name="dealloc")
 
-    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
-        return {(a,b,c): ReifyConfig()}
+    def get_configs_for_tensors(
+        self, a: TensorVariable, b: TensorVariable, c: TensorVariable
+    ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        return {(a, b, c): ReifyConfig()}
 
-    def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
+    def init_layouts(
+        self, lib: DTLCLib
+    ) -> tuple[Any, StructType, StructType, StructType]:
         root, (a, b, c) = lib.init()
         return root, a, b, c
 
@@ -192,19 +266,56 @@ class StaticTriple(MatMul):
 
 class StaticPair(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str,  runs: int, repeats: int, opt_level: int, epsilon: float):
+    def __init__(
+        self,
+        i: int,
+        j: int,
+        k: int,
+        use_scope_vars: bool,
+        seed: int,
+        base_dir: str,
+        name: str,
+        runs: int,
+        repeats: int,
+        opt_level: int,
+        epsilon: float,
+    ):
         name = f"pair_{name}"
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
+        super().__init__(
+            i,
+            j,
+            k,
+            use_scope_vars,
+            seed,
+            base_dir,
+            name,
+            runs,
+            repeats,
+            opt_level,
+            epsilon,
+        )
 
-    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+    def construct_lib_builder(
+        self,
+        lib_builder: LibBuilder,
+        a: TensorVariable,
+        b: TensorVariable,
+        c: TensorVariable,
+    ):
         lib_builder.make_init("init_AB", (a, b), [], free_name="dealloc_AB")
         lib_builder.make_init("init_C", (c), [], free_name="dealloc_C")
 
-    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
-        return {(a,b): ReifyConfig(coo_buffer_options=frozenset([0])),
-                c: ReifyConfig()}
+    def get_configs_for_tensors(
+        self, a: TensorVariable, b: TensorVariable, c: TensorVariable
+    ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        return {
+            (a, b): ReifyConfig(coo_buffer_options=frozenset([0])),
+            c: ReifyConfig(),
+        }
 
-    def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
+    def init_layouts(
+        self, lib: DTLCLib
+    ) -> tuple[Any, StructType, StructType, StructType]:
         root_ab, (a, b) = lib.init_AB()
         root_c, (c) = lib.init_C()
         return (root_ab, root_c), a, b, c
@@ -217,22 +328,58 @@ class StaticPair(MatMul):
 
 class StaticSingles(MatMul):
 
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+    def __init__(
+        self,
+        i: int,
+        j: int,
+        k: int,
+        use_scope_vars: bool,
+        seed: int,
+        base_dir: str,
+        name: str,
+        runs: int,
+        repeats: int,
+        opt_level: int,
+        epsilon: float,
+    ):
         name = f"singles_{name}"
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
+        super().__init__(
+            i,
+            j,
+            k,
+            use_scope_vars,
+            seed,
+            base_dir,
+            name,
+            runs,
+            repeats,
+            opt_level,
+            epsilon,
+        )
 
-
-    def construct_lib_builder(self, lib_builder: LibBuilder, a: TensorVariable, b: TensorVariable, c: TensorVariable):
+    def construct_lib_builder(
+        self,
+        lib_builder: LibBuilder,
+        a: TensorVariable,
+        b: TensorVariable,
+        c: TensorVariable,
+    ):
         lib_builder.make_init("init_A", (a), [], free_name="dealloc_A")
         lib_builder.make_init("init_B", (b), [], free_name="dealloc_B")
         lib_builder.make_init("init_C", (c), [], free_name="dealloc_C")
 
-    def get_configs_for_tensors(self, a: TensorVariable, b: TensorVariable, c: TensorVariable) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
-        return {a: ReifyConfig(coo_buffer_options=frozenset([0])),
-                b: ReifyConfig(coo_buffer_options=frozenset([0])),
-                c: ReifyConfig()}
+    def get_configs_for_tensors(
+        self, a: TensorVariable, b: TensorVariable, c: TensorVariable
+    ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
+        return {
+            a: ReifyConfig(coo_buffer_options=frozenset([0])),
+            b: ReifyConfig(coo_buffer_options=frozenset([0])),
+            c: ReifyConfig(),
+        }
 
-    def init_layouts(self, lib: DTLCLib) -> tuple[Any, StructType, StructType, StructType]:
+    def init_layouts(
+        self, lib: DTLCLib
+    ) -> tuple[Any, StructType, StructType, StructType]:
         root_a, (a) = lib.init_A()
         root_b, (b) = lib.init_B()
         root_c, (c) = lib.init_C()
@@ -244,13 +391,40 @@ class StaticSingles(MatMul):
         lib.dealloc_B(root_b)
         lib.dealloc_C(root_c)
 
+
 class RandomSparseSingles(StaticSingles):
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, rate_a: float, rate_b: float, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+    def __init__(
+        self,
+        i: int,
+        j: int,
+        k: int,
+        use_scope_vars: bool,
+        seed: int,
+        rate_a: float,
+        rate_b: float,
+        base_dir: str,
+        name: str,
+        runs: int,
+        repeats: int,
+        opt_level: int,
+        epsilon: float,
+    ):
         name = f"randomSparse_{rate_a}_{rate_b}_{name}"
         self.rate_a = rate_a
         self.rate_b = rate_b
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
-
+        super().__init__(
+            i,
+            j,
+            k,
+            use_scope_vars,
+            seed,
+            base_dir,
+            name,
+            runs,
+            repeats,
+            opt_level,
+            epsilon,
+        )
 
     def make_a_b(self, r: Random) -> tuple[np.ndarray, np.ndarray]:
         np_a = np.zeros((self.i, self.j), dtype=np.float32)
@@ -267,12 +441,40 @@ class RandomSparseSingles(StaticSingles):
                     np_b[i_j, i_k] = num
         return np_a, np_b
 
+
 class RowSparseSingles(StaticSingles):
-    def __init__(self, i: int, j: int, k: int, use_scope_vars: bool, seed: int, rate_a: float, rate_b: float, base_dir: str, name: str, runs: int, repeats: int, opt_level: int, epsilon: float):
+    def __init__(
+        self,
+        i: int,
+        j: int,
+        k: int,
+        use_scope_vars: bool,
+        seed: int,
+        rate_a: float,
+        rate_b: float,
+        base_dir: str,
+        name: str,
+        runs: int,
+        repeats: int,
+        opt_level: int,
+        epsilon: float,
+    ):
         name = f"randomSparse_{rate_a}_{rate_b}_{name}"
         self.rate_a = rate_a
         self.rate_b = rate_b
-        super().__init__(i, j, k, use_scope_vars, seed, base_dir, name, runs, repeats, opt_level, epsilon)
+        super().__init__(
+            i,
+            j,
+            k,
+            use_scope_vars,
+            seed,
+            base_dir,
+            name,
+            runs,
+            repeats,
+            opt_level,
+            epsilon,
+        )
 
     def sparsify(self, np_a, np_b, r: Random) -> tuple[np.ndarray, np.ndarray]:
         for i_i in range(np_a.shape[0]):
@@ -286,24 +488,151 @@ class RowSparseSingles(StaticSingles):
         return np_a, np_b
 
 
-if __name__ == '__main__':
-    
+if __name__ == "__main__":
+
     repeats = 5
     runs = 10
     benchmarks = []
-    # benchmarks.append(StaticTriple(128,128,128,True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(128, 128, 128, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(128, 128, 128, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    # benchmarks.append(StaticTriple(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(8, 8, 8, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(8, 8, 8, True, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 
-    # benchmarks.append(StaticTriple(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(128, 128, 128, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(128, 128, 128, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    # benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticPair(8, 8, 8, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    benchmarks.append(StaticSingles(8, 8, 8, False, 0, "./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    print(f"Args: {sys.argv}")
+
+    # if len(sys.argv) == 1 or "1" in sys.argv:
+    #     benchmarks.append(StaticTriple(128,128,128,True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    if len(sys.argv) == 1 or "2" in sys.argv:
+        benchmarks.append(
+            StaticPair(
+                128,
+                128,
+                128,
+                True,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
+    if len(sys.argv) == 1 or "3" in sys.argv:
+        benchmarks.append(
+            StaticSingles(
+                128,
+                128,
+                128,
+                True,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
+    # if len(sys.argv) == 1 or "4" in sys.argv:
+    #     benchmarks.append(StaticTriple(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    if len(sys.argv) == 1 or "5" in sys.argv:
+        benchmarks.append(
+            StaticPair(
+                8,
+                8,
+                8,
+                True,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
+    if len(sys.argv) == 1 or "6" in sys.argv:
+        benchmarks.append(
+            StaticSingles(
+                8,
+                8,
+                8,
+                True,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
+
+    # if len(sys.argv) == 1 or "7" in sys.argv:
+    #     benchmarks.append(StaticTriple(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    if len(sys.argv) == 1 or "8" in sys.argv:
+        benchmarks.append(
+            StaticPair(
+                128,
+                128,
+                128,
+                False,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
+    if len(sys.argv) == 1 or "9" in sys.argv:
+        benchmarks.append(
+            StaticSingles(
+                128,
+                128,
+                128,
+                False,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
+    # if len(sys.argv) == 1 or "10" in sys.argv:
+    #     benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    if len(sys.argv) == 1 or "1" in sys.argv:
+        benchmarks.append(
+            StaticPair(
+                8,
+                8,
+                8,
+                False,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
+    if len(sys.argv) == 1 or "12" in sys.argv:
+        benchmarks.append(
+            StaticSingles(
+                8,
+                8,
+                8,
+                False,
+                0,
+                "./results",
+                "",
+                repeats=repeats,
+                runs=runs,
+                opt_level=3,
+                epsilon=_Epsilon,
+            )
+        )
 
     # benchmarks.append(
     #     RandomSparseSingles(1024, 1024, 1024, False, 0, 1, 1,"./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
@@ -317,7 +646,6 @@ if __name__ == '__main__':
         benchmark.skip_testing = False
         benchmark.only_compile_to_llvm = False
 
-    for benchmark in benchmarks:
-        benchmark.run()
-
-
+    if len(sys.argv) == 1 or "run" in sys.argv:
+        for benchmark in benchmarks:
+            benchmark.run()

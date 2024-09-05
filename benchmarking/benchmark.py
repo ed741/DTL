@@ -541,29 +541,53 @@ class Benchmark(abc.ABC):
         loaded_layouts = None
         max_key = -1
         count = 0
-        for file in os.listdir(layout_store_keys):
+        checked_keys = set()
+        files = os.listdir(layout_store_keys)
+        for file in files:
             print(".", end="")
             count += 1
 
-            key = os.fsdecode(file)
-            key_int = int(key)
+            key_file_name = os.fsdecode(file)
+            is_locked = key_file_name.endswith(".lock")
+            key_int = int(key_file_name.removesuffix(".lock"))
+            checked_keys.add(key_int)
+            if not is_locked:
+                is_locked = os.path.exists(f"{layout_store_keys}/{key_int}.lock")
             max_key = max(max_key, key_int)
-            with open(f"{layout_store_keys}/{key}", "rb") as f:
-                loaded_layout_graph = pickle.load(f)
+            if not is_locked:
+                with open(f"{layout_store_keys}/{key_int}", "rb") as f:
+                    loaded_layout_graph = pickle.load(f)
+                if layout_graph.matches(loaded_layout_graph):
+                    print(
+                        f"{'\b' * count}Found matching layout graph in layout store: {key_int}"
+                    )
+                    with open(f"{layout_store_values}/{key_int}", "rb") as f:
+                        loaded_layouts = pickle.load(f)
+                    with open(f"{self.base_dir}/layout", "a") as f:
+                        f.write(f"{datetime.datetime.now()} Using Loaded layouts {key_int} from layouts store\n")
+                    break
 
-            if layout_graph.matches(loaded_layout_graph):
-                print(
-                    f"{'\b'*count}Found matching layout graph in layout store: {key_int}"
-                )
-                with open(f"{layout_store_values}/{key}", "rb") as f:
-                    loaded_layouts = pickle.load(f)
-                break
         if loaded_layouts is None and not self.do_not_generate:
             new_key = max_key + 1
             print("\b" * count, end="")
+            new_key_str = f"{new_key}?"
+            count = len(new_key_str)
             print(
-                f"No matching layout graph found after checking {count} graphs. Generating from scratch as {new_key}"
+                f"No matching layout graph found after checking {len(checked_keys)} graphs. Generating from scratch as {new_key_str}", end=""
             )
+
+            file_found = False
+            pid = os.getpid()
+            while not file_found:
+                try:
+                    with open(f"{layout_store_keys}/{new_key}.lock", "x") as f:
+                        f.write(f"{int(pid)}")
+                    file_found = True
+                except FileExistsError as e:
+                    new_key = new_key + 1
+                    new_key_str = f"{new_key}?"
+                    print(f"{'\b'*count}{new_key_str}")
+            print("\b")
 
             dtl_config_map: dict[TupleStruct[TensorVariable], ReifyConfig] = self.get_configs_for_DTL_tensors()
             config_map = {}
@@ -579,11 +603,20 @@ class Benchmark(abc.ABC):
                 layout_graph, config_map, plot_dir=f"{self.layout_store}/gen/{new_key}"
             ).generate_mappings(take_first=self.take_first_layouts)
             print("Writing new layouts to pickle")
+
+            with open(f"{layout_store_keys}/{new_key}.lock", "r") as f:
+                lock_pid = int(f.read())
+                if lock_pid != pid:
+                    print(f"ERROR: lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the layouts store directory")
+                    assert False, f"lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the layouts store directory"
             with open(f"{layout_store_values}/{new_key}", "wb") as f:
                 f.write(pickle.dumps(new_layouts))
             with open(f"{layout_store_keys}/{new_key}", "wb") as f:
                 f.write(pickle.dumps(layout_graph))
             loaded_layouts = new_layouts
+            os.remove(f"{layout_store_keys}/{new_key}.lock")
+            with open(f"{self.base_dir}/layout", "a") as f:
+                f.write(f"{datetime.datetime.now()} Generated Layouts as {new_key} in layouts store\n")
 
         order_store_keys = f"{self.order_store}/keys"
         os.makedirs(order_store_keys, exist_ok=True)
@@ -593,38 +626,73 @@ class Benchmark(abc.ABC):
         loaded_orders = None
         max_key = -1
         count = 0
+        checked_keys = set()
         for file in os.listdir(order_store_keys):
             print(".", end="")
             count += 1
 
-            key = os.fsdecode(file)
-            key_int = int(key)
+            key_file_name = os.fsdecode(file)
+            is_locked = key_file_name.endswith(".lock")
+            key_int = int(key_file_name.removesuffix(".lock"))
+            checked_keys.add(key_int)
+            if not is_locked:
+                is_locked = os.path.exists(f"{order_store_keys}/{key_int}.lock")
             max_key = max(max_key, key_int)
-            with open(f"{order_store_keys}/{key}", "rb") as f:
-                loaded_iteration_map = pickle.load(f)
+            if not is_locked:
+                with open(f"{order_store_keys}/{key_file_name}", "rb") as f:
+                    loaded_iteration_map = pickle.load(f)
+                if iteration_map.matches(loaded_iteration_map):
+                    print(
+                        f"{'\b' * count}Found matching iteration map in order store: {key_int}"
+                    )
+                    with open(f"{order_store_values}/{key_file_name}", "rb") as f:
+                        loaded_orders = pickle.load(f)
+                    with open(f"{self.base_dir}/order", "a") as f:
+                        f.write(f"{datetime.datetime.now()} Using Loaded orders {key_int} from orders store\n")
+                    break
 
-            if iteration_map.matches(loaded_iteration_map):
-                print(
-                    f"{'\b' * count}Found matching iteration map in order store: {key_int}"
-                )
-                with open(f"{order_store_values}/{key}", "rb") as f:
-                    loaded_orders = pickle.load(f)
-                break
         if loaded_orders is None and not self.do_not_generate:
             new_key = max_key + 1
             print("\b" * count, end="")
+            new_key_str = f"{new_key}?"
+            count = len(new_key_str)
             print(
-                f"No matching iteration map found after checking {count} maps. Generating from scratch as {new_key}"
+                f"No matching iteration map found after checking {len(checked_keys)} maps. Generating from scratch as {new_key_str}"
             )
+
+            file_found = False
+            pid = os.getpid()
+            while not file_found:
+                try:
+                    with open(f"{order_store_keys}/{new_key}.lock", "x") as f:
+                        f.write(f"{int(pid)}")
+                    file_found = True
+                except FileExistsError as e:
+                    new_key = new_key + 1
+                    new_key_str = f"{new_key}?"
+                    print(f"{'\b'*count}{new_key_str}")
+            print("\b")
+
             new_orders = IterationGenerator(
                 iteration_map, plot_dir=f"{self.order_store}/gen/{new_key}"
             ).generate_mappings(take_first=self.take_first_orders)
             print("Writing new orders to pickle")
+
+            with open(f"{order_store_keys}/{new_key}.lock", "r") as f:
+                lock_pid = int(f.read())
+                if lock_pid != pid:
+                    print(
+                        f"ERROR: lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the orders store directory")
+                    assert False, f"lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the orders store directory"
+
             with open(f"{order_store_values}/{new_key}", "wb") as f:
                 f.write(pickle.dumps(new_orders))
             with open(f"{order_store_keys}/{new_key}", "wb") as f:
                 f.write(pickle.dumps(iteration_map))
             loaded_orders = new_orders
+            os.remove(f"{order_store_keys}/{new_key}.lock")
+            with open(f"{self.base_dir}/order", "a") as f:
+                f.write(f"{datetime.datetime.now()} Generated orders as {new_key} in orders store\n")
 
         if loaded_layouts is None:
             print("loaded_layouts is none! Probably because do_not_generate is set")

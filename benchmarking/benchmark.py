@@ -106,7 +106,7 @@ class Benchmark(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def setup(self, lib: DTLCLib) -> _T:
+    def setup(self, lib: DTLCLib, first_args: _T=None) -> _T:
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -460,8 +460,11 @@ class Benchmark(abc.ABC):
         print("\b" * chars + val, end="")
         chars = len(val)
 
+        first_args = None
         for r in range(runs):
-            args = self.setup(lib)
+            args = self.setup(lib, first_args=first_args)
+            if first_args is None:
+                first_args = args
             run_args.append(args)
             if r % 2 == 0:
                 print(".", end="")
@@ -670,7 +673,7 @@ class Benchmark(abc.ABC):
                 except FileExistsError as e:
                     new_key = new_key + 1
                     new_key_str = f"{new_key}?"
-                    print(f"{'\b'*count}{new_key_str}")
+                    print(f"{'\b'*count}{new_key_str}", end="")
             print("\b")
 
             new_orders = IterationGenerator(

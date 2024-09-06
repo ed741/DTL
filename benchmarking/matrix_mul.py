@@ -143,6 +143,8 @@ class MatMul(Benchmark, abc.ABC):
 
         lib_builder.make_getter("get_C", (C), {}, [0, 1])
         lib_builder.make_function("matmul", matmul, [C], [A, B], [], [])
+        lib_builder.make_function("copy_A", A, [A], [A], [], [])
+        lib_builder.make_function("copy_B", B, [B], [B], [], [])
 
         return lib_builder
 
@@ -152,22 +154,27 @@ class MatMul(Benchmark, abc.ABC):
     ) -> tuple[Any, StructType, StructType, StructType]:
         raise NotImplementedError
 
-    def setup(self, lib: DTLCLib) -> _Args:
+    def setup(self, lib: DTLCLib, first_args: _Args = None) -> _Args:
         root, a, b, c = self.init_layouts(lib)
 
+        if first_args is None:
         # print("set a & b")
-        for i_i in range(self.np_a.shape[0]):
-            for i_j in range(self.np_a.shape[1]):
-                if self.np_a[i_i, i_j] != 0:
-                    lib.set_A(a, i_i, i_j, self.np_a[i_i, i_j])
-        for i_j in range(self.np_b.shape[0]):
-            for i_k in range(self.np_b.shape[1]):
-                if self.np_b[i_j, i_k] != 0:
-                    lib.set_B(b, i_j, i_k, self.np_b[i_j, i_k])
+            for i_i in range(self.np_a.shape[0]):
+                for i_j in range(self.np_a.shape[1]):
+                    if self.np_a[i_i, i_j] != 0:
+                        lib.set_A(a, i_i, i_j, self.np_a[i_i, i_j])
+            for i_j in range(self.np_b.shape[0]):
+                for i_k in range(self.np_b.shape[1]):
+                    if self.np_b[i_j, i_k] != 0:
+                        lib.set_B(b, i_j, i_k, self.np_b[i_j, i_k])
 
-        matmul_func = (
-            lib.matmul
-        )  # force the runtime to load and prepare the function (so it's cached)
+            matmul_func = (
+                lib.matmul
+            )  # force the runtime to load and prepare the function (so it's cached)
+        else:
+            f_root, f_a, f_b, f_c = first_args
+            lib.copy_A(a, f_a)
+            lib.copy_B(b, f_b)
         return root, a, b, c
 
     def get_benchmark(self, lib: DTLCLib) -> typing.Callable[[_Args], None]:

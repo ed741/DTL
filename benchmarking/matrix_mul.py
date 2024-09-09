@@ -645,13 +645,17 @@ if __name__ == "__main__":
     #     RandomSparseSingles(1024, 1024, 1024, False, 0, 1, 1,"./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 
     for benchmark in benchmarks:
-        benchmark.skip_testing = True
-        # benchmark.only_compile_to_llvm = True
+        benchmark.skip_testing = "skip_testing" in sys.argv
+        benchmark.only_compile_to_llvm = "only_to_llvm" in sys.argv
+        benchmark.do_not_compile_mlir = "no_mlir" in sys.argv
+        benchmark.do_not_lower = "do_not_lower" in sys.argv
         # benchmark.take_first_layouts = 5
         # benchmark.take_first_orders = 5
         benchmark.run()
         benchmark.skip_testing = False
         benchmark.only_compile_to_llvm = False
+        benchmark.do_not_compile_mlir = False
+        benchmark.do_not_lower = False
 
     if len(sys.argv) == 1 or "run" in sys.argv:
         for benchmark in benchmarks:

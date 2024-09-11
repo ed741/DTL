@@ -12,6 +12,7 @@ import numpy as np
 
 from dtl import TensorVariable
 from dtl.libBuilder import DTLCLib, LibBuilder, TupleStruct
+from scripts.xdsl_tests import within_epsilon
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.printer import Printer
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
@@ -269,6 +270,32 @@ class Benchmark(abc.ABC):
         lib._close(delete=delete)
         del lib
 
+    def get_test_id_from_row(self, row) -> tuple[tuple, int, tuple[int, float]]:
+        layout_num = int(row[0])
+        order_num = int(row[1])
+        rep = int(row[2])
+        runs = int(row[3])
+        time = float(row[4])
+        within_epsilon = row[5] == "True"
+        per_run_error = float(row[6])
+        bit_repeatable = row[7] == "True"
+        return (layout_num, order_num), rep, (runs, time)
+
+    def get_test_id(self, layout_num, order_num) -> tuple:
+        return (layout_num, order_num)
+
+    def get_results_header(self):
+        return [
+            "layout_mapping",
+            "iter_mapping",
+            "rep",
+            "runs",
+            "time",
+            "within_epsilon",
+            "per_run_error",
+            "bit_repeatable",
+        ]
+
     def run_benchmarking(self, lib_builder: LibBuilder) -> None:
         module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
 
@@ -289,12 +316,8 @@ class Benchmark(abc.ABC):
                 r = csv.reader(f)
                 next(r, None)  # skip header
                 for row in r:
-                    layout_num = row[0]
-                    order_num = row[1]
-                    rep = row[2]
-                    runs = row[3]
-                    time = row[4]
-                    results_done[(int(layout_num), int(order_num), int(rep))] = (int(runs), float(time))
+                    test_id, rep, result = self.get_test_id_from_row(row)
+                    results_done[(*test_id, rep)] = result
         print(f"{datetime.datetime.now()} Found {len(results_done)} results")
 
         write_results_header = not os.path.exists(results_file)
@@ -304,16 +327,7 @@ class Benchmark(abc.ABC):
             result_writer = csv.writer(csv_results)
             if write_results_header:
                 result_writer.writerow(
-                    [
-                        "layout_mapping",
-                        "iter_mapping",
-                        "rep",
-                        "runs",
-                        "time",
-                        "within_epsilon",
-                        "per_run_error",
-                        "bit_repeatable",
-                    ]
+                    self.get_results_header()
                 )
 
             count = 0
@@ -337,12 +351,13 @@ class Benchmark(abc.ABC):
 
                     test_time = None
                     runs_to_do = self.runs
-                    if (new_layout.number, new_order.number, -1) in results_done:
-                        t_r, test_time_result = results_done[(new_layout.number, new_order.number, -1)]
+                    test_id = self.get_test_id(new_layout.number, new_order.number)
+                    if (*test_id, -1) in results_done:
+                        t_r, test_time_result = results_done[(*test_id, -1)]
                         test_time = test_time_result / t_r
                         if test_time > self.waste_of_time_threshold:
                             print(
-                                f"{datetime.datetime.now()} Skipping layout: {new_layout.number}, order: {new_order.number} for all repeats [0..{self.repeats}) as the test time was {test_time}"
+                                f"{datetime.datetime.now()} Skipping {test_id} for all repeats [0..{self.repeats}) as the test time was {test_time}"
                             )
                             continue
                         elif test_time < self.test_too_short_threshold:
@@ -366,7 +381,7 @@ class Benchmark(abc.ABC):
 
                     if test_time is None:
                         print(
-                            f"{datetime.datetime.now()} testing :: l: {new_layout.number}, o: {new_order.number} to check if time is reasonable: ",
+                            f"{datetime.datetime.now()} testing :: test id: {test_id} to check if time is reasonable: ",
                             end = ""
                         )
                         if self.skip_testing:
@@ -379,8 +394,7 @@ class Benchmark(abc.ABC):
                             )
                             result_writer.writerow(
                                 [
-                                    new_layout.number,
-                                    new_order.number,
+                                    *test_id,
                                     -1,
                                     1,
                                     result,
@@ -412,14 +426,13 @@ class Benchmark(abc.ABC):
 
 
                     for rep in range(self.repeats):
-                        test_id = (new_layout.number, new_order.number, rep)
-                        if test_id in results_done:
+                        if (*test_id, rep) in results_done:
                             print(
-                                f"Skipping layout: {new_layout.number}, order: {new_order.number}, rep: {rep} as it is already in the results file"
+                                f"Skipping test id: {test_id}, rep: {rep} as it is already in the results file"
                             )
                             continue
                         print(
-                            f"{datetime.datetime.now()} Running benchmark repeat :: l: {new_layout.number}, o: {new_order.number}, rep: {rep} ",
+                            f"{datetime.datetime.now()} Running benchmark repeat :: test id: {test_id}, rep: {rep} ",
                             end="",
                         )
 
@@ -433,8 +446,7 @@ class Benchmark(abc.ABC):
                             )
                             result_writer.writerow(
                                 [
-                                    new_layout.number,
-                                    new_order.number,
+                                    *test_id,
                                     rep,
                                     runs_to_do,
                                     result,
@@ -452,7 +464,7 @@ class Benchmark(abc.ABC):
                         self.close_compiled_lib(lib)
         print(f"finished - results all correct: {results_correct}")
 
-    def _run_benchmark(self, lib: DTLCLib, runs: int):
+    def _run_benchmark(self, lib: DTLCLib, runs: int) -> tuple[float, bool, float, bool]:
         run_args = []
         chars = 0
 

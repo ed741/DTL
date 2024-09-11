@@ -29,6 +29,7 @@ class MatMul(Benchmark, abc.ABC):
         repeats: int,
         opt_num: int,
         epsilon: float,
+        **kwargs,
     ):
         var_name = "scope" if use_scope_vars else "static"
         new_base_dir = f"{base_dir}/matmul"
@@ -47,6 +48,7 @@ class MatMul(Benchmark, abc.ABC):
             repeats,
             opt_num,
             epsilon,
+            **kwargs,
         )
 
         # print("setting random values in np a & b")
@@ -348,6 +350,7 @@ class StaticSingles(MatMul):
         repeats: int,
         opt_level: int,
         epsilon: float,
+        **kwargs,
     ):
         name = f"singles_{name}"
         super().__init__(
@@ -362,6 +365,7 @@ class StaticSingles(MatMul):
             repeats,
             opt_level,
             epsilon,
+            **kwargs,
         )
 
     def construct_lib_builder(
@@ -415,8 +419,9 @@ class RandomSparseSingles(StaticSingles):
         repeats: int,
         opt_level: int,
         epsilon: float,
+        **kwargs,
     ):
-        name = f"randomSparse_{rate_a}_{rate_b}_{name}"
+        name = f"randomSparse_{name}"
         self.rate_a = rate_a
         self.rate_b = rate_b
         super().__init__(
@@ -431,6 +436,7 @@ class RandomSparseSingles(StaticSingles):
             repeats,
             opt_level,
             epsilon,
+            **kwargs,
         )
 
     def make_a_b(self, r: Random) -> tuple[np.ndarray, np.ndarray]:
@@ -447,6 +453,36 @@ class RandomSparseSingles(StaticSingles):
                     num = r.random()
                     np_b[i_j, i_k] = num
         return np_a, np_b
+
+    def get_test_id_from_row(self, row) -> tuple[tuple, int, tuple[int, float]]:
+        layout_num = int(row[0])
+        order_num = int(row[1])
+        rate_a = float(row[2])
+        rate_b = float(row[3])
+        rep = int(row[4])
+        runs = int(row[5])
+        time = float(row[6])
+        within_epsilon = row[7] == "True"
+        per_run_error = float(row[8])
+        bit_repeatable = row[9] == "True"
+        return (layout_num, order_num, rate_a, rate_b), rep, (runs, time)
+
+    def get_test_id(self, layout_num, order_num) -> tuple:
+        return (layout_num, order_num, self.rate_a, self.rate_b)
+
+    def get_results_header(self):
+        return [
+            "layout_mapping",
+            "iter_mapping",
+            "rate_a",
+            "rate_b",
+            "rep",
+            "runs",
+            "time",
+            "within_epsilon",
+            "per_run_error",
+            "bit_repeatable",
+        ]
 
 
 class RowSparseSingles(StaticSingles):
@@ -658,6 +694,9 @@ if __name__ == "__main__":
                     runs=runs,
                     opt_level=3,
                     epsilon=_Epsilon,
+                    waste_of_time_threshold = 5.0,
+                    test_too_short_threshold = 0.01,
+                    long_run_multiplier = 10,
                 )
             )
 

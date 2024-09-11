@@ -29,6 +29,7 @@ class MatMul(Benchmark, abc.ABC):
         repeats: int,
         opt_num: int,
         epsilon: float,
+        np_suffix: str = "",
         **kwargs,
     ):
         var_name = "scope" if use_scope_vars else "static"
@@ -76,9 +77,9 @@ class MatMul(Benchmark, abc.ABC):
 
         self.tensor_variables = None
 
-        self.handle_reference_array(np_a, "np_a")
-        self.handle_reference_array(np_b, "np_b")
-        self.handle_reference_array(np_c, "np_c")
+        self.handle_reference_array(np_a, "np_a"+np_suffix)
+        self.handle_reference_array(np_b, "np_b"+np_suffix)
+        self.handle_reference_array(np_c, "np_c"+np_suffix)
 
     def make_a_b(self, r: Random) -> tuple[np.ndarray, np.ndarray]:
         np_a = np.zeros((self.i, self.j), dtype=np.float32)
@@ -436,6 +437,7 @@ class RandomSparseSingles(StaticSingles):
             repeats,
             opt_level,
             epsilon,
+            np_suffix = f"_{rate_a}_{rate_b}_",
             **kwargs,
         )
 

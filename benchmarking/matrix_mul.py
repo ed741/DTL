@@ -641,6 +641,26 @@ if __name__ == "__main__":
             )
         )
 
+    for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
+        if len(sys.argv) == 1 or f"13-{rate}" in sys.argv:
+            benchmarks.append(
+                RandomSparseSingles(
+                    1024,
+                    1024,
+                    1024,
+                    False,
+                    0,
+                    float(rate),
+                    float(rate),
+                    "./results",
+                    "",
+                    repeats=repeats,
+                    runs=runs,
+                    opt_level=3,
+                    epsilon=_Epsilon,
+                )
+            )
+
     # benchmarks.append(
     #     RandomSparseSingles(1024, 1024, 1024, False, 0, 1, 1,"./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
 

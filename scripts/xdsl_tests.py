@@ -2,8 +2,10 @@
 import ctypes
 import time
 import timeit
+from random import Random, random
 
 import numpy as np
+from numpy.random import random
 
 from dtl import *
 from dtl.dag import RealVectorSpace, Index
@@ -35,7 +37,9 @@ matMul = (A[i,j]*(B[j,k])).sum(j).forall(i).forall(k)
 # q_vec = (t1+t2)[j:vQ].forall(j)
 # matMul = (A[i,j]*B[j,k]+1+q_vec[i]).sum(j).forall(i).forall(k)
 
-lib_builder = LibBuilder({v10: 10})
+
+len_i, len_j, len_k = 1024, 1024, 1024
+lib_builder = LibBuilder({v10: len_j})
 lib_builder.make_dummy("test", 3)
 lib_builder.make_init("init_AB", (A,B), [vQ, vS])
 # lib_builder.make_init("init_A", A, [vQ])
@@ -43,6 +47,7 @@ lib_builder.make_init("init_AB", (A,B), [vQ, vS])
 lib_builder.make_setter("set_Out", output_t_var, {}, [0, 1])
 lib_builder.make_setter("set_A", A, {}, [0, 1])
 lib_builder.make_setter("set_B", B, {}, [0, 1])
+lib_builder.make_getter("get_Out", output_t_var, {}, [0,1])
 lib_builder.make_init("init_Out", output_t_var, [vQ, vS])
 lib_builder.make_print_tensorVar("print_A", A, [])
 lib_builder.make_print_tensorVar("print_B", B, [])
@@ -77,59 +82,89 @@ print("Done lib.test()")
 # a_root, a = lib.init_A(3)
 # b_root, b = lib.init_B(5)
 
-ab_root, (a, b) = lib.init_AB(3, 5)
+ab_root, (a, b) = lib.init_AB(len_i, len_k)
 print("inited A")
-out_root, out = lib.init_Out(3, 5)
+out_root, out = lib.init_Out(len_i, len_k)
 print("inited a,b,out")
-
-print("a:")
-lib.print_A(a)
-print("b:")
-lib.print_B(b)
-print("out:")
-lib.print_Out(out)
-
-np_a = np.zeros((3, 10))
-np_b = np.zeros((10, 5))
-# lib.set_AB(a,b)
-for i in range(3):
-    for j in range(10):
-        if j % 2 == 0:
-            continue
-        lib.set_A(a, i, j, float(i+1))
-        np_a[i,j] = float(i+1)
-for j in range(10):
-    for k in range(5):
-        if j % 2 == 0:
-            continue
-        lib.set_B(b , j, k, float(k+1))
-        np_b[j, k] = float(k+1)
-print("A&B set")
-print(np_a)
-print(np_b)
-
-print("a:")
-lib.print_A(a)
-print("b:")
-lib.print_B(b)
-print("out:")
-# lib.print_Out(out)
-np_out = np.matmul(np_a, np_b)
-print(np_out)
-
-def benchmark():
-    lib.mm(out, a, b)
-
-
-result = timeit.timeit(benchmark, number=1)
-print("Matrix Mul")
 
 print("a:")
 # lib.print_A(a)
 print("b:")
 # lib.print_B(b)
 print("out:")
-lib.print_Out(out)
+# lib.print_Out(out)
 
+np_a = np.zeros((len_i, len_j))
+np_b = np.zeros((len_j, len_k))
+r = Random(1)
+# lib.set_AB(a,b)
+a_non_zeros = 0
+b_non_zeros = 0
+for i in range(len_i):
+    for j in range(len_j):
+        if r.random() < 0.001:
+            r_val = r.random()
+            lib.set_A(a, i, j, r_val)
+            np_a[i,j] = r_val
+            a_non_zeros += 1
+for j in range(len_j):
+    for k in range(len_k):
+        if r.random() < 0.001:
+            r_val = r.random()
+            lib.set_B(b , j, k, r_val)
+            np_b[j, k] = r_val
+            b_non_zeros += 1
+print("A&B set")
+print(np_a)
+print(np_b)
+print(f"a non_zeros: {a_non_zeros}")
+print(f"b non_zeros: {b_non_zeros}")
+
+print("a:")
+# lib.print_A(a)
+print("b:")
+# lib.print_B(b)
+print("out:")
+# lib.print_Out(out)
+np_out = np.zeros((len_i, len_k))
+def np_bench():
+    np.matmul(np_a, np_b, out=np_out)
+np_result = timeit.timeit(np_bench, number=1)
+print(np_out)
+print(f"np_time: {np_result}")
+
+def benchmark():
+    lib.mm(out, a, b)
+
+print("Start benchmark")
+result = timeit.timeit(benchmark, number=1)
+print("Done Matrix Mul")
+
+print("a:")
+# lib.print_A(a)
+print("b:")
+# lib.print_B(b)
+print("out:")
+# lib.print_Out(out)
+
+total_error = 0
+epsilon = 1e-5
+within_epsilon = True
+for i_i in range(len_i):
+    for i_k in range(len_k):
+        np_num = np_out[i_i, i_k]
+        res = lib.get_Out(out, i_i, i_k).value
+        error = abs(res - np_num)
+        total_error += error
+        normalised_epsilon = np_num * epsilon
+        if error > normalised_epsilon:
+            print(
+                f"Result miss match! at i: {i_i}, k: {i_k}, np_c = {np_num}, c = {res}, error = {res - np_num}, epsilon(abs) = {epsilon}, epsilon(norm) = {normalised_epsilon}"
+            )
+            within_epsilon = False
+
+
+print(f"within_epsilon: {within_epsilon}")
+print(f"total_error: {total_error}")
 print("timeit result:")
 print(result)

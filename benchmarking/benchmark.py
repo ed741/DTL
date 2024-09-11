@@ -12,7 +12,6 @@ import numpy as np
 
 from dtl import TensorVariable
 from dtl.libBuilder import DTLCLib, LibBuilder, TupleStruct
-from scripts.xdsl_tests import within_epsilon
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.printer import Printer
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (

@@ -3,13 +3,14 @@ import csv
 import datetime
 import os
 import pickle
-import timeit
-import typing
+import subprocess
+import time
 from io import StringIO
 
 import nptyping
 import numpy as np
 
+import benchmarkRunner
 from dtl import TensorVariable
 from dtl.libBuilder import DTLCLib, LibBuilder, TupleStruct
 from xdsl.dialects.builtin import ModuleOp
@@ -25,9 +26,6 @@ from xdsl.transforms.experimental.dlt.generate_dlt_layouts import (
 from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
 from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
 
-_T = typing.TypeVar("_T", bound=tuple["_CData", ...])
-
-
 class Benchmark(abc.ABC):
 
     def __init__(
@@ -42,6 +40,7 @@ class Benchmark(abc.ABC):
         waste_of_time_threshold: float = 0.1,
         test_too_short_threshold: float = 0.0001,
         long_run_multiplier: int = 1000,
+        benchmark_timeout: float = 5,
     ):
         self.base_dir = base_dir
         self.runs = runs
@@ -51,8 +50,6 @@ class Benchmark(abc.ABC):
 
         self.layout_store = layout_store
         self.order_store = order_store
-
-        self._lib_store: dict[tuple[int, int], DTLCLib] = {}
 
         self.take_first_layouts = 0
         self.take_first_orders = 0
@@ -66,6 +63,13 @@ class Benchmark(abc.ABC):
         self.waste_of_time_threshold = waste_of_time_threshold
         self.test_too_short_threshold = test_too_short_threshold
         self.long_run_multiplier = long_run_multiplier
+        self.benchmark_timeout = benchmark_timeout
+
+        self.np_arg_paths: dict[str, str] = {}
+        self.np_args: dict[str, np.ndarray] = {}
+        self.np_res_paths: dict[str, str] = {}
+        self.np_ress: dict[str, np.ndarray] = {}
+
 
         os.makedirs(self.base_dir, exist_ok=True)
 
@@ -82,7 +86,9 @@ class Benchmark(abc.ABC):
             case 4:
                 return ["-O3", "-march=native"]
 
-    def handle_reference_array(self, array: nptyping.NDArray, name: str):
+    def handle_reference_array(self, array: nptyping.NDArray, name: str, is_arg: bool, is_res: bool, scope_name: str):
+        if scope_name is None:
+            scope_name = name
         path = f"{self.base_dir}/{name}"
         if os.path.exists(path):
             loaded_array = np.loadtxt(path)
@@ -96,6 +102,17 @@ class Benchmark(abc.ABC):
         else:
             np.savetxt(path, array)
             print(f"Reference array saved to {path}")
+        if is_arg:
+            assert scope_name not in self.np_arg_paths
+            self.np_arg_paths[scope_name] = path
+            assert scope_name not in self.np_args
+            self.np_args[scope_name] = array
+
+        if is_res:
+            assert scope_name not in self.np_res_paths
+            self.np_res_paths[scope_name] = path
+            assert scope_name not in self.np_ress
+            self.np_ress[scope_name] = array
 
     @abc.abstractmethod
     def define_lib_builder(self) -> LibBuilder:
@@ -106,23 +123,20 @@ class Benchmark(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def setup(self, lib: DTLCLib, first_args: _T=None) -> _T:
+    def get_setup(self) -> str:
         raise NotImplementedError
 
     @abc.abstractmethod
-    def get_benchmark(self, lib: DTLCLib) -> typing.Callable[[_T], None]:
+    def get_benchmark(self) -> str:
         raise NotImplementedError
 
     @abc.abstractmethod
-    def test(
-        self, lib: DTLCLib, args: _T, first_args: _T
-    ) -> tuple[
-        bool, float, bool
-    ]:  # (within_epsilon, total_error, bit_wise_reapeatable)
+    def get_test(self) -> str:
+        # must define 'correct', 'total_error', 'consistent' in the scope
         raise NotImplementedError
 
     @abc.abstractmethod
-    def teardown(self, lib: DTLCLib, args: _T) -> None:
+    def get_clean(self) -> str:
         raise NotImplementedError
 
     def run(self):
@@ -142,14 +156,11 @@ class Benchmark(abc.ABC):
         lib_builder: LibBuilder,
         layout_graph: LayoutGraph,
         iteration_map: IterationMap,
-    ) -> DTLCLib | None:
+    ) -> tuple[DTLCLib, str, str] | None:
         print(
             f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: ",
             end="",
         )
-        if (key := (new_layout.number, new_order.number)) in self._lib_store:
-            print("loaded from store")
-            return self._lib_store[key]
 
         test_name = f"{new_layout.number}.{new_order.number}"
         test_path = f"{self.base_dir}/tests/{test_name}"
@@ -192,9 +203,8 @@ class Benchmark(abc.ABC):
         if lib_exists:
             function_types_str = {k.data: v for k, v in function_types.items()}
             lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
-            print("loaded.")
-            self._lib_store[key] = lib
-            return lib
+            print("found.")
+            return lib, lib_path, func_types_path
         else:
             print("not found, ", end="")
 
@@ -218,8 +228,7 @@ class Benchmark(abc.ABC):
                     verbose=0,
                 )
                 print(f"lib compiled to: {lib_path}")
-                self._lib_store[key] = lib
-                return lib
+                return lib, lib_path, func_types_path
             else:
                 print("not found, ", end="")
                 if module_clone is None:
@@ -253,21 +262,10 @@ class Benchmark(abc.ABC):
                     print(
                         f"compiled to binary. LLVM: {llvm_path}, lib: {lib._library_path}"
                     )
-                    self._lib_store[key] = lib
-                    return lib
+                    return lib, lib_path, func_types_path
                 else:
                     print(f"compiled to LLVM: {llvm_path} but no lib was produced.")
                     return None
-
-    def close_compiled_lib(self, lib: DTLCLib, delete: bool = False):
-        keys = []
-        for k, value in self._lib_store.items():
-            if value == lib:
-                keys.append(k)
-        for k in keys:
-            del self._lib_store[k]
-        lib._close(delete=delete)
-        del lib
 
     def get_test_id_from_row(self, row) -> tuple[tuple, int, tuple[int, float]]:
         layout_num = int(row[0])
@@ -275,9 +273,11 @@ class Benchmark(abc.ABC):
         rep = int(row[2])
         runs = int(row[3])
         time = float(row[4])
-        within_epsilon = row[5] == "True"
-        per_run_error = float(row[6])
-        bit_repeatable = row[7] == "True"
+        correct = row[5] == "True"
+        mean_error = float(row[6])
+        consistent = row[7] == "True"
+        waiting_time = float(row[8])
+        finished = row[9] == "True"
         return (layout_num, order_num), rep, (runs, time)
 
     def get_test_id(self, layout_num, order_num) -> tuple:
@@ -290,9 +290,11 @@ class Benchmark(abc.ABC):
             "rep",
             "runs",
             "time",
-            "within_epsilon",
-            "per_run_error",
-            "bit_repeatable",
+            "correct",
+            "mean_error",
+            "consistent",
+            "waiting_time",
+            "finished"
         ]
 
     def run_benchmarking(self, lib_builder: LibBuilder) -> None:
@@ -335,12 +337,13 @@ class Benchmark(abc.ABC):
             for new_layout in layouts:
                 for new_order in orders:
                     count += 1
+                    test_id = self.get_test_id(new_layout.number, new_order.number)
                     print(
-                        f"{datetime.datetime.now()} Running Benchmarks for layout: {new_layout.number}, order: {new_order.number}. ({count}/{total_l_o_pairs})"
+                        f"{datetime.datetime.now()} Running Benchmarks for {test_id}. ({count}/{total_l_o_pairs})"
                     )
 
                     if all(
-                        (new_layout.number, new_order.number, rep) in results_done
+                        (*test_id, rep) in results_done
                         for rep in range(-1, self.repeats)
                     ):
                         print(
@@ -348,28 +351,28 @@ class Benchmark(abc.ABC):
                         )
                         continue
 
-                    test_time = None
+                    t_result = None
                     runs_to_do = self.runs
-                    test_id = self.get_test_id(new_layout.number, new_order.number)
+
                     if (*test_id, -1) in results_done:
                         t_r, test_time_result = results_done[(*test_id, -1)]
-                        test_time = test_time_result / t_r
-                        if test_time > self.waste_of_time_threshold:
+                        t_result = test_time_result / t_r
+                        if test_time_result < 0 or t_result > self.waste_of_time_threshold:
                             print(
-                                f"{datetime.datetime.now()} Skipping {test_id} for all repeats [0..{self.repeats}) as the test time was {test_time}"
+                                f"{datetime.datetime.now()} Skipping {test_id} for all repeats [0..{self.repeats}) as the test time was {t_result}"
                             )
                             continue
-                        elif test_time < self.test_too_short_threshold:
+                        elif t_result < self.test_too_short_threshold:
                             runs_to_do = self.runs * self.long_run_multiplier
                             print(
-                                f"Test result found and runs set to: {self.runs}*{self.long_run_multiplier}={runs_to_do}"
+                                f"Test result found ({t_result}) and runs set to: {self.runs}*{self.long_run_multiplier}={runs_to_do}"
                             )
                         else:
                             print(
-                                f"Test result found and runs set to: {runs_to_do}"
+                                f"Test result found ({t_result}) and runs set to: {runs_to_do}"
                             )
 
-                    lib = self.get_compiled_lib(
+                    compiled_lib = self.get_compiled_lib(
                         new_layout,
                         new_order,
                         module,
@@ -378,42 +381,43 @@ class Benchmark(abc.ABC):
                         iteration_map,
                     )
 
-                    if test_time is None:
+                    if t_result is None:
                         print(
                             f"{datetime.datetime.now()} testing :: test id: {test_id} to check if time is reasonable: ",
                             end = ""
                         )
                         if self.skip_testing:
                             print(f"Skipping testing")
-                        elif lib is None:
+                        elif compiled_lib is None:
                             print(f"Cannot test because lib is none")
                         else:
-                            result, epsilon_correct, error_per_run, bit_repeatable = (
-                                self._run_benchmark(lib, runs = 1)
+                            t_result, t_correct, t_mean_error, t_consistent, t_waiting_time, t_finished  = (
+                                self._run_benchmark(compiled_lib, runs = 1, external=True)
                             )
                             result_writer.writerow(
                                 [
                                     *test_id,
                                     -1,
                                     1,
-                                    result,
-                                    epsilon_correct,
-                                    error_per_run,
-                                    bit_repeatable,
+                                    t_result,
+                                    t_correct,
+                                    t_mean_error,
+                                    t_consistent,
+                                    t_waiting_time,
+                                    t_finished
                                 ]
                             )
                             csv_results.flush()
-                            test_time = result
                             print(
-                                f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable} :: ",
+                                f" ==>  result: {t_result}, correct: {t_correct}, mean error: {t_mean_error}, consistent: {t_consistent}, waiting time: {t_waiting_time}, finished: {t_finished} :: ",
                                 end = ""
                             )
-                            if test_time > self.waste_of_time_threshold:
+                            if not t_finished or t_result < 0 or t_result > self.waste_of_time_threshold:
                                 print(
                                     f"Test time too long - Skipping"
                                 )
                                 continue
-                            elif test_time < self.test_too_short_threshold:
+                            elif t_result < self.test_too_short_threshold:
                                 runs_to_do = self.runs * self.long_run_multiplier
                                 print(
                                     f"Runs set to: {self.runs}*{self.long_run_multiplier}={runs_to_do}"
@@ -437,11 +441,11 @@ class Benchmark(abc.ABC):
 
                         if self.skip_testing:
                             print(f"Skipping testing")
-                        elif lib is None:
+                        elif compiled_lib is None:
                             print(f"Cannot test because lib is none")
                         else:
-                            result, epsilon_correct, error_per_run, bit_repeatable = (
-                                self._run_benchmark(lib, runs_to_do)
+                            result, correct, mean_error, consistent, waiting_time, finished = (
+                                self._run_benchmark(compiled_lib, runs_to_do, external=False)
                             )
                             result_writer.writerow(
                                 [
@@ -449,99 +453,88 @@ class Benchmark(abc.ABC):
                                     rep,
                                     runs_to_do,
                                     result,
-                                    epsilon_correct,
-                                    error_per_run,
-                                    bit_repeatable,
+                                    correct,
+                                    mean_error,
+                                    consistent,
+                                    waiting_time,
+                                    finished
                                 ]
                             )
                             csv_results.flush()
-                            results_correct &= epsilon_correct
+                            results_correct &= correct
                             print(
-                                f" ==>  result: {result}, epsilon_correct: {epsilon_correct}, error_per_run: {error_per_run}, bit_repeatable: {bit_repeatable}"
+                                f" ==>  result: {result}, correct: {correct}, mean error: {mean_error}, consistent: {consistent}, waiting time: {waiting_time}, finished {finished}"
                             )
-                    if lib is not None:
-                        self.close_compiled_lib(lib)
+                    if compiled_lib is not None:
+                        lib = compiled_lib[0]
+                        lib._close(delete=False)
         print(f"finished - results all correct: {results_correct}")
 
-    def _run_benchmark(self, lib: DTLCLib, runs: int) -> tuple[float, bool, float, bool]:
-        run_args = []
-        chars = 0
 
-        val = "setting up"
-        print("\b" * chars + val, end="")
-        chars = len(val)
+    def _run_benchmark(self, lib_paths: tuple[DTLCLib, str, str], runs: int, external: bool = False) -> tuple[
+        float, bool, float, bool, float, bool]:
+        lib, lib_path, func_types_path = lib_paths
+        if external:
+            return self._run_benchmark_external(lib_path, func_types_path, runs)
+        chars = inline_print(0, "running benchmark")
+        start_time = time.time()
+        result, correct, mean_error, consistent =  benchmarkRunner.run_benchmark(lib, runs, self.np_args, self.np_ress, self.get_setup(), self.get_benchmark(), self.get_test(), self.get_clean())
+        waiting_time = time.time() - start_time
+        chars = inline_print(chars, f"finished in {waiting_time}s")
+        return result, correct, mean_error, consistent, waiting_time, True
 
-        first_args = None
-        for r in range(runs):
-            args = self.setup(lib, first_args=first_args)
-            if first_args is None:
-                first_args = args
-            run_args.append(args)
-            if r % 2 == 0:
-                print(".", end="")
-                chars += 1
+    def _run_benchmark_external(self,  lib_path: str, func_types_path: str, runs: int) -> tuple[float, bool, float, bool, float, bool]:
+        chars = inline_print(0, "setting up")
+        args = []
+        args.extend(["python", "benchmarking/benchmarkRunner.py"])
+        args.extend([lib_path, func_types_path])
+        args.append(f"{runs}")
+        for np_arg_name, np_arg_path in self.np_arg_paths.items():
+            args.extend([f"-a={np_arg_name}", np_arg_path])
+        for np_res_name, np_res_path in self.np_res_paths.items():
+            args.extend([f"-r={np_res_name}", np_res_path])
+        args.extend(["--setup", self.get_setup()])
+        args.extend(["--benchmark", self.get_benchmark()])
+        args.extend(["--test", self.get_test()])
+        args.extend(["--clean", self.get_clean()])
+
+        current_env = os.environ.copy()
+
+        start_time = time.time()
+        process_benchmark = subprocess.Popen(
+            args, env=current_env, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+        chars = inline_print(chars, "waiting for benchmark")
+
+        finished = False
+        try:
+            out, err = process_benchmark.communicate(timeout=self.benchmark_timeout*runs)
+            finished = True
+            waiting_time = time.time() - start_time
+            chars = inline_print(chars, f"finished in {waiting_time}s")
+        except subprocess.TimeoutExpired as e:
+            waiting_time = time.time() - start_time
+            chars = inline_print(chars, f"timed out in {waiting_time}s")
+            process_benchmark.kill()
+            out, err = process_benchmark.communicate()
+            chars = inline_print(chars, "killed")
+
+        out = out.decode("utf8")
+        split_out = out.split("\n")
+        if len(split_out) != 5:
+            if finished:
+                return (-1.0, False, -1.0, False, waiting_time, True)
             else:
-                print("\b", end="")
-                chars -= 1
-
-        val = "getting benchmark..."
-        print("\b" * chars + val, end="")
-        chars = len(val)
-
-        single_benchmark = self.get_benchmark(lib)
-
-        def benchmark():
-            for args in run_args:
-                single_benchmark(args)
-
-        val = "running benchmark..."
-        print("\b" * chars + val, end="")
-        chars = len(val)
-
-        result = timeit.timeit(benchmark, number=1)
-
-        val = "testing results"
-        print("\b" * chars + val, end="")
-        chars = len(val)
-
-        total_within_epsilon = True
-        total_error = 0.0
-        total_bitwise_consistent = True
-
-        first_args = run_args[0]
-
-        for r, args in enumerate(run_args):
-            within_epsilon, error, bitwise_consistent = self.test(lib, args, first_args)
-            total_within_epsilon &= within_epsilon
-            total_error += error
-            total_bitwise_consistent &= bitwise_consistent
-            if r % 2 == 0:
-                print(".", end="")
-                chars += 1
-            else:
-                print("\b", end="")
-                chars -= 1
-
-        val = "tearing down"
-        print("\b" * chars + val, end="")
-        chars = len(val)
-
-        for r, args in enumerate(run_args):
-            self.teardown(lib, args)
-            if r % 2 == 0:
-                print(".", end="")
-                chars += 1
-            else:
-                print("\b", end="")
-                chars -= 1
-
-        mean_error = total_error / len(run_args)
-
-        val = ""
-        print("\b" * chars + val, end="")
-        chars = len(val)
-
-        return result, total_within_epsilon, mean_error, total_bitwise_consistent
+                return (-1.0, True, -1.0, True, waiting_time, False)
+        result = float(split_out[0])
+        correct = bool(split_out[1] == "True")
+        mean_error = float(split_out[2])
+        consistent = bool(split_out[3] == "True")
+        last_check = split_out[4] == ""
+        if not last_check:
+            return (-2.0, False, -2.0, False, waiting_time, finished)
+        return (result, correct, mean_error, consistent, waiting_time, finished)
 
     def _generate_versions(
         self, layout_graph: LayoutGraph, iteration_map: IterationMap, lib_builder: LibBuilder,
@@ -725,3 +718,7 @@ class Benchmark(abc.ABC):
         printer = Printer(print_generic_format=False, stream=res)
         printer.print(module)
         return res.getvalue()
+
+def inline_print(chars: int, string: str) -> int:
+    print(("\b" * chars) + string, end="")
+    return len(string)

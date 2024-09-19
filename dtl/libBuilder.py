@@ -6,6 +6,8 @@ import typing
 from ctypes import cdll
 from dataclasses import dataclass
 
+import numpy as np
+
 import dtl
 from dtl import (
     VectorSpaceVariable,
@@ -22,7 +24,7 @@ from xdsl.dialects import builtin, arith, printf, llvm, func, scf
 from xdsl.dialects.builtin import FunctionType, IndexType, ModuleOp, StringAttr, i64
 from xdsl.dialects.experimental import dlt
 from xdsl.dialects.func import Return, FuncOp
-from xdsl.ir import Attribute, Region, MLContext, TypeAttribute
+from xdsl.ir import Attribute, Block, Region, MLContext, TypeAttribute
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
 from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental.dlt import lower_dlt_to_
@@ -70,12 +72,21 @@ def _flatten(ts: TupleStruct[_T]) -> list[_T]:
         return [ts]
 
 
+@dataclass(frozen=True)
+class NpArrayCtype:
+    shape: tuple[int,...]
+
+    def get(self):
+        return np.ctypeslib.ndpointer(np.float32, ndim=len(self.shape), shape=self.shape, flags='C_CONTIGUOUS')
+
 @dataclass
 class FuncTypeDescriptor:
-    params: list[Attribute]
-    return_types: list[Attribute]
+    params: list[NpArrayCtype | TypeAttribute]
+    return_types: list[TypeAttribute]
     structure: TupleStruct
 
+class StructType(ctypes.Structure):
+    pass
 
 class FunctionCaller:
     def __init__(self, func, param_types, ret_types, return_structure=None):
@@ -87,6 +98,7 @@ class FunctionCaller:
         self.return_structure: TupleStruct = return_structure
 
     def __call__(self, *args, **kwargs):
+        # print(f"caller arg types: {self.func.argtypes}")
         rets = []
         func_args = []
         for ret_type in self.ret_types:
@@ -94,11 +106,13 @@ class FunctionCaller:
             func_args.append(ctypes.pointer(rets[-1]))
         for param_type, arg in zip(self.param_types, args):
             if not isinstance(arg, param_type):
-                # print(type(arg))
-                # print(param_type)
-                # print(type(arg) == param_type)
-                arg = param_type(arg)  # try to make init the right type?
-            assert isinstance(arg, param_type)
+                if isinstance(arg, np.ndarray):
+                    arg = arg
+                else:
+                    # print(type(arg))
+                    # print(param_type)
+                    # print(type(arg) == param_type)
+                    arg = param_type(arg)  # try to make init the right type?
             if isinstance(arg, StructType):
                 arg = ctypes.pointer(arg)
             func_args.append(arg)
@@ -186,9 +200,16 @@ class DTLCLib:
             self.convert_llvm_type_to_ctypes(t, dlt_type=dlt_t)
             for t, dlt_t in zip(param_types, func_descriptor.params)
         ]
-        self._lib[name].argtypes = ctype_ret_pointer_types + ctype_param_types
+        ctype_param_pointer_types = [ctypes.POINTER(t) if isinstance(p, llvm.LLVMStructType) else t for t, p in zip(ctype_param_types, param_types)]
+        new_arg_types = ctype_ret_pointer_types + ctype_param_pointer_types
+        func_handle = getattr(self._lib, name)
+        func_handle.argtypes = new_arg_types
+        # print(f"new arg_types: {new_arg_types}")
+        # print(f"arg types hdl: {func_handle.argtypes}")
+        # print(f"arg types atr: {getattr(self._lib, name).argtypes}")
+
         caller = FunctionCaller(
-            self._lib[name],
+            func_handle,
             ctype_param_types,
             ctype_ret_types,
             return_structure=func_descriptor.structure,
@@ -197,7 +218,7 @@ class DTLCLib:
         return caller
 
     def convert_llvm_type_to_ctypes(
-        self, llvm_type: Attribute, dlt_type: TypeAttribute = None
+        self, llvm_type: Attribute, dlt_type: NpArrayCtype | TypeAttribute = None
     ):
         assert isinstance(llvm_type, TypeAttribute)
         if dlt_type is not None:
@@ -210,12 +231,12 @@ class DTLCLib:
 
     @functools.singledispatchmethod
     def _convert_llvm_type_to_ctypes(
-        self, llvm_type: TypeAttribute, dlt_type: TypeAttribute = None
+        self, llvm_type: TypeAttribute, dlt_type: NpArrayCtype | TypeAttribute = None
     ):
         raise NotImplementedError(f"Cannot convert type: {llvm_type} to ctypes")
 
     @_convert_llvm_type_to_ctypes.register
-    def _(self, llvm_type: builtin.IntegerType, dlt_type: TypeAttribute = None):
+    def _(self, llvm_type: builtin.IntegerType, dlt_type: NpArrayCtype | TypeAttribute = None):
         if llvm_type == builtin.i64:
             return ctypes.c_uint64
         else:
@@ -224,7 +245,7 @@ class DTLCLib:
             )
 
     @_convert_llvm_type_to_ctypes.register
-    def _(self, llvm_type: builtin.Float32Type, dlt_type: TypeAttribute = None):
+    def _(self, llvm_type: builtin.Float32Type, dlt_type: NpArrayCtype | TypeAttribute = None):
         if llvm_type == builtin.f32:
             return ctypes.c_float
         else:
@@ -233,11 +254,13 @@ class DTLCLib:
             )
 
     @_convert_llvm_type_to_ctypes.register
-    def _(self, llvm_type: llvm.LLVMPointerType, dlt_type: TypeAttribute = None):
+    def _(self, llvm_type: llvm.LLVMPointerType, dlt_type: NpArrayCtype | TypeAttribute = None):
+        if isinstance(dlt_type, NpArrayCtype):
+            return dlt_type.get()
         return ctypes.c_void_p
 
     @_convert_llvm_type_to_ctypes.register
-    def _(self, llvm_type: llvm.LLVMStructType, dlt_type: TypeAttribute = None):
+    def _(self, llvm_type: llvm.LLVMStructType, dlt_type: NpArrayCtype | TypeAttribute = None):
         member_types = [
             self.convert_llvm_type_to_ctypes(member) for member in llvm_type.types
         ]
@@ -262,11 +285,6 @@ class DTLCLib:
             _fields_ = [(str(i), member) for i, member in enumerate(member_types)]
 
         return OtherStructType
-
-
-class StructType(ctypes.Structure):
-    pass
-
 
 class LibBuilder:
     def __init__(self, scope_extents: dict[dtl.UnknownSizeVectorSpace, int] = None):
@@ -735,6 +753,37 @@ class LibBuilder:
         func_type = func.function_type
         self.func_map[name] = FuncTypeDescriptor(
             list(func_type.inputs), list(func_type.outputs), None
+        )
+        return func
+
+    def make_custom_function(self,
+                             name: str,
+                             block: Block,
+                             args: list[NpArrayCtype | TensorVariable],
+                             ):
+        assert len(args) == len(block.args)
+        new_args = []
+        for arg, b_arg in zip(args, block.args):
+            if isinstance(arg, NpArrayCtype):
+                assert isinstance(b_arg.type, llvm.LLVMPointerType)
+                new_args.append(arg)
+            elif isinstance(arg, TensorVariable):
+                assert arg in self.tensor_var_details
+                ptr_type = self.tensor_var_details[arg]
+                assert b_arg.type == ptr_type
+                new_args.append(ptr_type)
+            else:
+                raise NotImplementedError
+
+        region = Region([block])
+        argTypes = [arg.type for arg in block.args]
+        assert isinstance(block.last_op, Return)
+        retTypes = [arg.type for arg in block.last_op.operands]
+        func = FuncOp.from_region(name, argTypes, retTypes, region)
+        self.funcs.append(func)
+        func_type = func.function_type
+        self.func_map[name] = FuncTypeDescriptor(
+            new_args, list(func_type.outputs), None
         )
         return func
 

@@ -524,8 +524,8 @@ class Benchmark(abc.ABC):
         split_out = out.split("\n")
         if len(split_out) != 5:
             if finished:
-                return (-1.0, False, -1.0, False, waiting_time, True)
                 print(f" ERROR: test finished but output is: {split_out} ")
+                return (-1.0, False, -1.0, False, waiting_time, True)
             else:
                 return (-1.0, True, -1.0, True, waiting_time, False)
         result = float(split_out[0])

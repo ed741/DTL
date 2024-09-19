@@ -509,7 +509,7 @@ class Benchmark(abc.ABC):
 
         finished = False
         try:
-            out, err = process_benchmark.communicate(timeout=self.benchmark_timeout*runs)
+            out_bytes, err = process_benchmark.communicate(timeout=self.benchmark_timeout*runs)
             finished = True
             waiting_time = time.time() - start_time
             chars = inline_print(chars, "finished")
@@ -517,14 +517,15 @@ class Benchmark(abc.ABC):
             waiting_time = time.time() - start_time
             chars = inline_print(chars, "timed out")
             process_benchmark.kill()
-            out, err = process_benchmark.communicate()
+            out_bytes, err = process_benchmark.communicate()
             chars = inline_print(chars, "killed")
 
-        out = out.decode("utf8")
+        out = out_bytes.decode("utf8")
         split_out = out.split("\n")
         if len(split_out) != 5:
             if finished:
                 print(f" ERROR: test finished but output is: {split_out} ")
+                print(f" ERROR: outputs from process:\n out: {out_bytes} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}")
                 return (-1.0, False, -1.0, False, waiting_time, True)
             else:
                 return (-1.0, True, -1.0, True, waiting_time, False)

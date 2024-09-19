@@ -807,8 +807,8 @@ if __name__ == "__main__":
         benchmark.only_compile_to_llvm = "only_to_llvm" in sys.argv
         benchmark.do_not_compile_mlir = "no_mlir" in sys.argv
         benchmark.do_not_lower = "do_not_lower" in sys.argv
-        benchmark.take_first_layouts = 5
-        benchmark.take_first_orders = 5
+        # benchmark.take_first_layouts = 5
+        # benchmark.take_first_orders = 5
         benchmark.run()
         benchmark.skip_testing = False
         benchmark.only_compile_to_llvm = False

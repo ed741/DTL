@@ -480,7 +480,7 @@ class Benchmark(abc.ABC):
         start_time = time.time()
         result, correct, mean_error, consistent =  benchmarkRunner.run_benchmark(lib, runs, self.np_args, self.np_ress, self.get_setup(), self.get_benchmark(), self.get_test(), self.get_clean())
         waiting_time = time.time() - start_time
-        chars = inline_print(chars, f"finished in {waiting_time}s")
+        chars = inline_print(chars, f"")
         return result, correct, mean_error, consistent, waiting_time, True
 
     def _run_benchmark_external(self,  lib_path: str, func_types_path: str, runs: int) -> tuple[float, bool, float, bool, float, bool]:
@@ -512,10 +512,10 @@ class Benchmark(abc.ABC):
             out, err = process_benchmark.communicate(timeout=self.benchmark_timeout*runs)
             finished = True
             waiting_time = time.time() - start_time
-            chars = inline_print(chars, f"finished in {waiting_time}s")
+            chars = inline_print(chars, "finished")
         except subprocess.TimeoutExpired as e:
             waiting_time = time.time() - start_time
-            chars = inline_print(chars, f"timed out in {waiting_time}s")
+            chars = inline_print(chars, "timed out")
             process_benchmark.kill()
             out, err = process_benchmark.communicate()
             chars = inline_print(chars, "killed")

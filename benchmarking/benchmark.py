@@ -502,7 +502,7 @@ class Benchmark(abc.ABC):
 
         start_time = time.time()
         process_benchmark = subprocess.Popen(
-            args, env=current_env, stdin=subprocess.PIPE,
+            args, env=current_env, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
             stdout=subprocess.PIPE,
         )
         chars = inline_print(chars, "waiting for benchmark")

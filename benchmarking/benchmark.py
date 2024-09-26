@@ -41,6 +41,7 @@ class Benchmark(abc.ABC):
         test_too_short_threshold: float = 0.0001,
         long_run_multiplier: int = 1000,
         benchmark_timeout: float = 5,
+        benchmark_child_process: bool = True,
     ):
         self.base_dir = base_dir
         self.runs = runs
@@ -64,10 +65,11 @@ class Benchmark(abc.ABC):
         self.test_too_short_threshold = test_too_short_threshold
         self.long_run_multiplier = long_run_multiplier
         self.benchmark_timeout = benchmark_timeout
+        self.benchmark_child_process = benchmark_child_process
 
-        self.np_arg_paths: dict[str, str] = {}
+        self.np_arg_paths: dict[str, tuple[type, str]] = {}
         self.np_args: dict[str, np.ndarray] = {}
-        self.np_res_paths: dict[str, str] = {}
+        self.np_res_paths: dict[str, tuple[type, str]] = {}
         self.np_ress: dict[str, np.ndarray] = {}
 
 
@@ -86,13 +88,18 @@ class Benchmark(abc.ABC):
             case 4:
                 return ["-O3", "-march=native"]
 
-    def handle_reference_array(self, array: nptyping.NDArray, name: str, is_arg: bool, is_res: bool, scope_name: str):
+    def handle_reference_array(self, array: nptyping.NDArray, name: str, is_arg: bool, is_res: bool, scope_name: str, binary: bool = False, dtype: type = np.float32):
         if scope_name is None:
             scope_name = name
+        if binary:
+            name += ".npy"
         path = f"{self.base_dir}/{name}"
         if os.path.exists(path):
-            loaded_array = np.loadtxt(path)
-            if not np.equal(array, loaded_array).all():
+            if binary:
+                loaded_array = np.load(path)
+            else:
+                loaded_array = np.loadtxt(path)
+            if (array.shape != loaded_array.shape) or (not np.equal(array, loaded_array).all()):
                 print(
                     f"ERROR! loaded array does not match newly calculated reference array: {path}"
                 )
@@ -100,17 +107,20 @@ class Benchmark(abc.ABC):
                 # print(f"Reference array consistent with {path}")
                 pass
         else:
-            np.savetxt(path, array)
+            if binary:
+                np.save(path, array)
+            else:
+                np.savetxt(path, array)
             print(f"Reference array saved to {path}")
         if is_arg:
             assert scope_name not in self.np_arg_paths
-            self.np_arg_paths[scope_name] = path
+            self.np_arg_paths[scope_name] = dtype, path
             assert scope_name not in self.np_args
             self.np_args[scope_name] = array
 
         if is_res:
             assert scope_name not in self.np_res_paths
-            self.np_res_paths[scope_name] = path
+            self.np_res_paths[scope_name] = dtype, path
             assert scope_name not in self.np_ress
             self.np_ress[scope_name] = array
 
@@ -139,14 +149,58 @@ class Benchmark(abc.ABC):
     def get_clean(self) -> str:
         raise NotImplementedError
 
-    def run(self):
+    def run(self, benchmark_options: list[str] = None):
+        old_skip_testing = self.skip_testing
+        self.skip_testing = "--skip_testing" in benchmark_options
+
+        old_only_compile_to_llvm = self.only_compile_to_llvm
+        self.only_compile_to_llvm = "--only_to_llvm" in benchmark_options
+
+        old_do_not_compile_mlir = self.do_not_compile_mlir
+        self.do_not_compile_mlir = "--no_mlir" in benchmark_options
+
+        old_do_not_lower = self.do_not_lower
+        self.do_not_lower = "--do_not_lower" in benchmark_options
+
+        only_layouts = set()
+        only_orders = set()
+        for arg in benchmark_options:
+            if arg.startswith("-l="):
+                only_layouts.add(int(arg.removeprefix("-l=")))
+            elif arg.startswith("-o="):
+                only_orders.add(int(arg.removeprefix("-o=")))
+        if len(only_layouts) == 0:
+            only_layouts = None
+        if len(only_orders) == 0:
+            only_orders = None
+
+        take_first_layouts = 0
+        take_first_orders = 0
+        for arg in benchmark_options:
+            if arg.startswith("-tfl="):
+                take_first_layouts = int(arg.removeprefix("-tfl="))
+            elif arg.startswith("-tfo="):
+                take_first_orders = int(arg.removeprefix("-tfo="))
+
+        old_take_first_layouts = self.take_first_layouts
+        self.take_first_layouts = take_first_layouts
+        old_take_first_orders = self.take_first_orders
+        self.take_first_orders = take_first_orders
+
         print(
             f"{datetime.datetime.now()} Running benchmark {type(self)} at {self.base_dir}"
         )
         print(f"{datetime.datetime.now()} Defining lib builder")
         lib_builder = self.define_lib_builder()
         print(f"{datetime.datetime.now()} Starting benchmarking...")
-        self.run_benchmarking(lib_builder)
+        self.run_benchmarking(lib_builder, only_layouts=only_layouts, only_orders=only_orders)
+
+        self.skip_testing = old_skip_testing
+        self.only_compile_to_llvm = old_only_compile_to_llvm
+        self.do_not_compile_mlir = old_do_not_compile_mlir
+        self.do_not_lower = old_do_not_lower
+        self.take_first_layouts = old_take_first_layouts
+        self.take_first_orders = old_take_first_orders
 
     def get_compiled_lib(
         self,
@@ -297,7 +351,7 @@ class Benchmark(abc.ABC):
             "finished"
         ]
 
-    def run_benchmarking(self, lib_builder: LibBuilder) -> None:
+    def run_benchmarking(self, lib_builder: LibBuilder, only_layouts: set[int]|None = None, only_orders: set[int]|None = None) -> None:
         module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
 
         print(
@@ -332,6 +386,34 @@ class Benchmark(abc.ABC):
                 )
 
             count = 0
+
+            if only_layouts is not None:
+                print(f"{datetime.datetime.now()} Running only layouts: {only_layouts}")
+                layouts = {l for l in layouts if l.number in only_layouts}
+            if only_orders is not None:
+                print(f"{datetime.datetime.now()} Running only orders: {only_orders}")
+                orders = {o for o in orders if o.number in only_orders}
+
+            layouts_skipped = set()
+            for l in layouts:
+                if self.skip_layout(l):
+                    layouts_skipped.add(l.number)
+            if len(layouts_skipped) > 0:
+                list_of_l = ','.join([str(l) for l in list(layouts_skipped)[:10]]) + (", ..." if len(layouts_skipped)>10 else "")
+                print(f"{datetime.datetime.now()} Skipping {len(layouts_skipped)} layouts that are considered not worth testing: [{list_of_l}]")
+                layouts = {l for l in layouts if l.number not in layouts_skipped}
+
+            orders_skipped = set()
+            for o in orders:
+                if self.skip_order(o):
+                    orders_skipped.add(o.number)
+            if len(orders_skipped) > 0:
+                list_of_o = ','.join([str(o) for o in list(orders_skipped)[:10]]) + (
+                    ", ..." if len(orders_skipped) > 10 else "")
+                print(
+                    f"{datetime.datetime.now()} Skipping {len(orders_skipped)} orders that are considered not worth testing: [{list_of_o}]")
+                orders = {o for o in orders if o.number not in orders_skipped}
+
             total_l_o_pairs = len(layouts) * len(orders)
 
             for new_layout in layouts:
@@ -392,7 +474,7 @@ class Benchmark(abc.ABC):
                             print(f"Cannot test because lib is none")
                         else:
                             t_result, t_correct, t_mean_error, t_consistent, t_waiting_time, t_finished  = (
-                                self._run_benchmark(compiled_lib, runs = 1, external=True)
+                                self._run_benchmark(compiled_lib, runs = 1, test_run=True)
                             )
                             result_writer.writerow(
                                 [
@@ -445,7 +527,7 @@ class Benchmark(abc.ABC):
                             print(f"Cannot test because lib is none")
                         else:
                             result, correct, mean_error, consistent, waiting_time, finished = (
-                                self._run_benchmark(compiled_lib, runs_to_do, external=False)
+                                self._run_benchmark(compiled_lib, runs_to_do, test_run=False)
                             )
                             result_writer.writerow(
                                 [
@@ -471,16 +553,14 @@ class Benchmark(abc.ABC):
         print(f"finished - results all correct: {results_correct}")
 
 
-    def _run_benchmark(self, lib_paths: tuple[DTLCLib, str, str], runs: int, external: bool = False) -> tuple[
+    def _run_benchmark(self, lib_paths: tuple[DTLCLib, str, str], runs: int, test_run: bool = False) -> tuple[
         float, bool, float, bool, float, bool]:
         lib, lib_path, func_types_path = lib_paths
-        if external:
+        if self.benchmark_child_process and test_run:
             return self._run_benchmark_external(lib_path, func_types_path, runs)
-        chars = inline_print(0, "running benchmark")
         start_time = time.time()
-        result, correct, mean_error, consistent =  benchmarkRunner.run_benchmark(lib, runs, self.np_args, self.np_ress, self.get_setup(), self.get_benchmark(), self.get_test(), self.get_clean())
+        result, correct, mean_error, consistent =  benchmarkRunner.run_benchmark(lib, runs, self.np_args, self.np_ress, self.get_setup(), self.get_benchmark(), self.get_test(), self.get_clean(), print_updates=True)
         waiting_time = time.time() - start_time
-        chars = inline_print(chars, f"")
         return result, correct, mean_error, consistent, waiting_time, True
 
     def _run_benchmark_external(self,  lib_path: str, func_types_path: str, runs: int) -> tuple[float, bool, float, bool, float, bool]:
@@ -489,10 +569,11 @@ class Benchmark(abc.ABC):
         args.extend(["python", "benchmarking/benchmarkRunner.py"])
         args.extend([lib_path, func_types_path])
         args.append(f"{runs}")
-        for np_arg_name, np_arg_path in self.np_arg_paths.items():
-            args.extend([f"-a={np_arg_name}", np_arg_path])
-        for np_res_name, np_res_path in self.np_res_paths.items():
-            args.extend([f"-r={np_res_name}", np_res_path])
+        np_type_map = {np.float32: ":f32", np.float64: ":f64", np.int32: ":i32", np.int64: ":i64"}
+        for np_arg_name, (np_arg_ty, np_arg_path) in self.np_arg_paths.items():
+            args.extend([f"-a{np_type_map[np_arg_ty]}={np_arg_name}", np_arg_path])
+        for np_res_name, (np_res_ty, np_res_path) in self.np_res_paths.items():
+            args.extend([f"-r{np_type_map[np_res_ty]}={np_res_name}", np_res_path])
         args.extend(["--setup", self.get_setup()])
         args.extend(["--benchmark", self.get_benchmark()])
         args.extend(["--test", self.get_test()])
@@ -720,6 +801,13 @@ class Benchmark(abc.ABC):
         printer = Printer(print_generic_format=False, stream=res)
         printer.print(module)
         return res.getvalue()
+
+    def skip_layout(self, l: PtrMapping) -> bool:
+        return False
+
+    def skip_order(self, o: IterationMapping) -> bool:
+        return False
+
 
 def inline_print(chars: int, string: str) -> int:
     print(("\b" * chars) + string, end="")

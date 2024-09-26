@@ -1,4 +1,5 @@
 import ctypes
+import dataclasses
 import functools
 import os
 import tempfile
@@ -75,9 +76,10 @@ def _flatten(ts: TupleStruct[_T]) -> list[_T]:
 @dataclass(frozen=True)
 class NpArrayCtype:
     shape: tuple[int,...]
+    base_type: type = dataclasses.field(default=np.float32)
 
     def get(self):
-        return np.ctypeslib.ndpointer(np.float32, ndim=len(self.shape), shape=self.shape, flags='C_CONTIGUOUS')
+        return np.ctypeslib.ndpointer(self.base_type, ndim=len(self.shape), shape=self.shape, flags='C_CONTIGUOUS')
 
 @dataclass
 class FuncTypeDescriptor:

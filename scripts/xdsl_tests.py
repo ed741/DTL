@@ -102,14 +102,14 @@ a_non_zeros = 0
 b_non_zeros = 0
 for i in range(len_i):
     for j in range(len_j):
-        if r.random() < 0.001:
+        if r.random() < 0.1:
             r_val = r.random()
             lib.set_A(a, i, j, r_val)
             np_a[i,j] = r_val
             a_non_zeros += 1
 for j in range(len_j):
     for k in range(len_k):
-        if r.random() < 0.001:
+        if r.random() < 1:
             r_val = r.random()
             lib.set_B(b , j, k, r_val)
             np_b[j, k] = r_val

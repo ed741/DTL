@@ -394,6 +394,9 @@ class Benchmark(abc.ABC):
                 print(f"{datetime.datetime.now()} Running only orders: {only_orders}")
                 orders = {o for o in orders if o.number in only_orders}
 
+            layouts = sorted(list(layouts), key=(lambda l: l.number))
+            orders = sorted(list(orders), key=(lambda o: o.number))
+
             layouts_skipped = set()
             for l in layouts:
                 if self.skip_layout(l):
@@ -490,6 +493,7 @@ class Benchmark(abc.ABC):
                                 ]
                             )
                             csv_results.flush()
+                            results_correct &= t_correct
                             print(
                                 f" ==>  result: {t_result}, correct: {t_correct}, mean error: {t_mean_error}, consistent: {t_consistent}, waiting time: {t_waiting_time}, finished: {t_finished} :: ",
                                 end = ""

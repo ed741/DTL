@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+cd ../
+rm ./native_debugging/lib_29734_1.db.* && cp ./results/matmul/pair__scope_O3_8.8.8_0_10/tests/29734.1/lib_29734_1.ll ./native_debugging/lib_29734_1.db.ll
+opt ./native_debugging/lib_29734_1.db.ll --enable-debugify -o ./native_debugging/lib_29734_1.db.g.ll -S
+clang -Og ./native_debugging/native_run_pair.c ./native_debugging/lib_29734_1.db.g.ll -o ./native_debugging/prog
+valgrind --track-origins=yes ./native_debugging/prog

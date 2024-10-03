@@ -635,7 +635,7 @@ class RowSparseSingles(StaticSingles):
 
 if __name__ == "__main__":
 
-    repeats = 5
+    repeats = 3
     runs = 10
     benchmarks = []
 

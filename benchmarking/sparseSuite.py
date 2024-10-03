@@ -1,5 +1,6 @@
 import abc
 import sys
+import timeit
 from random import Random
 
 import numpy as np
@@ -57,7 +58,14 @@ class SparseSuite(Benchmark, abc.ABC):
         self.i, self.j = ref_a.shape
         self.nnz = ref_a.nnz
 
-        ref_c = ref_a.astype(np.float32) * ref_b.astype(np.float32)
+        ref_c_l = []
+        def make_c():
+            ref_c_l.append(ref_a.astype(np.float32) * ref_b.astype(np.float32))
+        result = timeit.timeit(make_c, number=100)
+        print(f"Time to make ref_c with scipy: {result}s")
+
+        ref_c = ref_c_l[0]
+
 
         self.ref_a = ref_a
         self.np_a_row = ref_a.row.astype(np.int32)#[0:1000]

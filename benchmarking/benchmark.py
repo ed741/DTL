@@ -38,9 +38,9 @@ class Benchmark(abc.ABC):
         opt_num: int,
         epsilon: float,
         waste_of_time_threshold: float = 0.1,
-        test_too_short_threshold: float = 0.0001,
-        long_run_multiplier: int = 1000,
-        benchmark_timeout: float = 5,
+        test_too_short_threshold: float = 0.001,
+        long_run_multiplier: int = 100,
+        benchmark_timeout: float = 3,
         benchmark_child_process: bool = True,
     ):
         self.base_dir = base_dir
@@ -88,7 +88,7 @@ class Benchmark(abc.ABC):
             case 4:
                 return ["-O3", "-march=native"]
 
-    def handle_reference_array(self, array: nptyping.NDArray, name: str, is_arg: bool, is_res: bool, scope_name: str, binary: bool = False, dtype: type = np.float32):
+    def handle_reference_array(self, array: nptyping.NDArray, name: str, is_arg: bool, is_res: bool, scope_name: str, binary: bool = True, dtype: type = np.float32):
         if scope_name is None:
             scope_name = name
         if binary:
@@ -109,6 +109,7 @@ class Benchmark(abc.ABC):
         else:
             if binary:
                 np.save(path, array)
+                np.savetxt(path+".txt", array)
             else:
                 np.savetxt(path, array)
             print(f"Reference array saved to {path}")

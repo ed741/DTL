@@ -333,6 +333,7 @@ class StaticTriple(MatMul):
         repeats: int,
         opt_level: int,
         epsilon: float,
+        **kwargs
     ):
         name = f"triple_{name}"
         super().__init__(
@@ -347,6 +348,7 @@ class StaticTriple(MatMul):
             repeats,
             opt_level,
             epsilon,
+            **kwargs
         )
 
     def construct_lib_builder(
@@ -385,6 +387,7 @@ class StaticPair(MatMul):
         repeats: int,
         opt_level: int,
         epsilon: float,
+        **kwargs,
     ):
         name = f"pair_{name}"
         super().__init__(
@@ -399,6 +402,7 @@ class StaticPair(MatMul):
             repeats,
             opt_level,
             epsilon,
+            **kwargs
         )
 
     def construct_lib_builder(
@@ -687,6 +691,7 @@ if __name__ == "__main__":
                 runs=runs,
                 opt_level=3,
                 epsilon=_Epsilon,
+                benchmark_child_process=False,
             )
         )
     if len(sys.argv) == 1 or "6" in sys.argv:
@@ -703,6 +708,7 @@ if __name__ == "__main__":
                 runs=runs,
                 opt_level=3,
                 epsilon=_Epsilon,
+                benchmark_child_process=False,
             )
         )
 
@@ -756,6 +762,7 @@ if __name__ == "__main__":
                 runs=runs,
                 opt_level=3,
                 epsilon=_Epsilon,
+                benchmark_child_process=False,
             )
         )
     if len(sys.argv) == 1 or "12" in sys.argv:
@@ -772,6 +779,7 @@ if __name__ == "__main__":
                 runs=runs,
                 opt_level=3,
                 epsilon=_Epsilon,
+                benchmark_child_process=False,
             )
         )
 

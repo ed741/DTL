@@ -151,9 +151,10 @@ class LayoutPlotter:
             if isinstance(name, StringAttr):
                 name = name.data
             label_name = name
+            name = str(id(name))
             if isinstance(root, dlt.PtrType):
                 if root.identification.data != name:
-                    label_name = name + " : " + root.identification.data
+                    label_name += " : " + root.identification.data
                 root = root.layout
             node_name = LayoutPlotter._plot_layout(
                 root,
@@ -534,6 +535,8 @@ def _escape_text(text: str) -> str:
         .replace("]", "\\]")
         .replace("{", "\\{")
         .replace("}", "\\}")
+        # .replace("(", "\\(")
+        # .replace(")", "\\)")
         .replace("|", "\\|")
         .replace("<", "\\<")
         .replace(">", "\\>")

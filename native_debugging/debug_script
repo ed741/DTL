@@ -4,3 +4,8 @@ rm ./native_debugging/lib_29734_1.db.* && cp ./results/matmul/pair__scope_O3_8.8
 opt ./native_debugging/lib_29734_1.db.ll --enable-debugify -o ./native_debugging/lib_29734_1.db.g.ll -S
 clang -Og ./native_debugging/native_run_pair.c ./native_debugging/lib_29734_1.db.g.ll -o ./native_debugging/prog
 valgrind --track-origins=yes ./native_debugging/prog
+
+
+# clang++ ./taco_test.cpp -I ~/Code/taco/include -L ~/Code/taco/buildgcc/lib -o taco_lib.so -ltaco -shared -fPIC -O3
+# clang++ ./taco_test.cpp -I ~/Code/taco/include -L ~/Code/taco/buildgcc/lib -o taco -ltaco -O3
+

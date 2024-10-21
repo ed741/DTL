@@ -109,7 +109,7 @@ def mlir_compile(
         print("Done compiling with mlir / clang")
 
 
-def clang_compile(llvm_path: str, lib_output: str, extra_clang_args: list[str] = None, verbose: int = 2):
+def clang_compile(input_path: str, lib_output: str, extra_clang_args: list[str] = None, verbose: int = 2):
     if extra_clang_args is None:
         extra_clang_args = []
 
@@ -121,7 +121,7 @@ def clang_compile(llvm_path: str, lib_output: str, extra_clang_args: list[str] =
     # clang_args.append("-g")
     # clang_args.append("-O3")
     clang_args.extend(extra_clang_args)
-    clang_args.append(llvm_path)
+    clang_args.append(input_path)
 
     if verbose > 1:
         print(" ".join(clang_args))

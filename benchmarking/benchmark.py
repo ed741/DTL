@@ -5,114 +5,593 @@ import os
 import pickle
 import subprocess
 import time
-from io import StringIO
+import typing
+from dataclasses import dataclass
+from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, overload
 
 import nptyping
 import numpy as np
 
-import benchmarkRunner
-from dtl import TensorVariable
-from dtl.libBuilder import DTLCLib, LibBuilder, TupleStruct
-from xdsl.dialects.builtin import ModuleOp
-from xdsl.printer import Printer
-from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
-    IterationGenerator,
-    IterationMapping,
-)
-from xdsl.transforms.experimental.dlt.generate_dlt_layouts import (
-    LayoutGenerator,
-    PtrMapping, ReifyConfig,
-)
-from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
-from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
+from benchmarking import benchmarkRunner
 
-class Benchmark(abc.ABC):
+K = TypeVar("K")
+Options: TypeAlias = dict[str, Any]
+PythonCode: TypeAlias = str
+
+ID_Tuple: TypeAlias = tuple[str|int|bool, ...]
+U_Res_Tuple: TypeAlias = tuple[int, float, float, bool]
+Res_Tuple: TypeAlias = tuple[int|bool|float, ...]
+Res_Dict: TypeAlias = dict[tuple[ID_Tuple, int], tuple[U_Res_Tuple, Res_Tuple]]
+
+@dataclass(frozen=True)
+class TestCode():
+    setup: PythonCode
+    benchmark: PythonCode
+    test: PythonCode # must define the variables named by 'get_result_headings()' e.g. 'correct', 'total_error', 'consistent' in the scope
+    clean: PythonCode
+
+class Test(abc.ABC):
+    def __init__(self, code: TestCode):
+        self.code = code
+
+    @classmethod
+    @abc.abstractmethod
+    def get_id_headings(cls) -> list[tuple[str,type[str]|type[int]|type[bool]]]:
+        raise NotImplementedError
+
+    @classmethod
+    @abc.abstractmethod
+    def get_result_headings(cls) -> list[tuple[str, type[int]|type[bool]|type[float]]]:
+        raise NotImplementedError # return [("correct", bool),("total_error", float),("consistent", bool)]
+
+    @abc.abstractmethod
+    def get_id(self) -> ID_Tuple:
+        raise NotImplementedError
+
+    def get_id_str(self) -> str:
+        return "-".join([str(p) for p in self.get_id()])
+
+    @abc.abstractmethod
+    def get_load(self, tests_path: str) -> PythonCode:
+        # must define 'lib'
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_test_path(self, tests_path: str) -> str:
+        raise NotImplementedError
+
+T = TypeVar('T', bound=Test)
+L = TypeVar('L')
+
+@dataclass(frozen=True)
+class BenchmarkSettings:
+    runs: int = 10,
+    repeats: int = 3,
+    waste_of_time_threshold: float = 0.1,
+    test_too_short_threshold: float = 0.001,
+    long_run_multiplier: int = 100,
+    benchmark_timeout: float = 3,
+    benchmark_child_process: bool = True,
+
+class Benchmark(abc.ABC, Generic[T, L]):
 
     def __init__(
         self,
         base_dir: str,
-        layout_store: str,
-        order_store: str,
-        runs: int,
-        repeats: int,
-        opt_num: int,
-        epsilon: float,
-        waste_of_time_threshold: float = 0.1,
-        test_too_short_threshold: float = 0.001,
-        long_run_multiplier: int = 100,
-        benchmark_timeout: float = 3,
-        benchmark_child_process: bool = True,
+        settings: BenchmarkSettings,
     ):
         self.base_dir = base_dir
-        self.runs = runs
-        self.repeats = repeats
-        self.opt_num = opt_num
-        self.epsilon = epsilon
-
-        self.layout_store = layout_store
-        self.order_store = order_store
-
-        self.take_first_layouts = 0
-        self.take_first_orders = 0
-        self.do_not_generate = False
-        self.only_generate = False
-        self.do_not_lower = False
-        self.do_not_compile_mlir = False
-        self.only_compile_to_llvm = False
-        self.skip_testing = False
-
-        self.waste_of_time_threshold = waste_of_time_threshold
-        self.test_too_short_threshold = test_too_short_threshold
-        self.long_run_multiplier = long_run_multiplier
-        self.benchmark_timeout = benchmark_timeout
-        self.benchmark_child_process = benchmark_child_process
+        self.settings = settings
 
         self.np_arg_paths: dict[str, tuple[type, str]] = {}
         self.np_args: dict[str, np.ndarray] = {}
         self.np_res_paths: dict[str, tuple[type, str]] = {}
         self.np_ress: dict[str, np.ndarray] = {}
 
+        self.lib: L | None = None
+        self.lib_id: ID_Tuple | None = None
+
 
         os.makedirs(self.base_dir, exist_ok=True)
 
-    def get_extra_clang_args(self) -> list[str]:
-        match self.opt_num:
-            case 0:
-                return []
-            case 1:
-                return ["-O1"]
-            case 2:
-                return ["-O2"]
-            case 3:
-                return ["-O3"]
-            case 4:
-                return ["-O3", "-march=native"]
+    @property
+    def test_class(self) -> type[T]:
+        return typing.get_args(self.__orig_bases__[0])[0]
 
-    def handle_reference_array(self, array: nptyping.NDArray, name: str, is_arg: bool, is_res: bool, scope_name: str, binary: bool = True, dtype: type = np.float32):
+    @abc.abstractmethod
+    def initialise_benchmarks(self, options: Options) -> list[T]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def load_lib(self, test: T, test_path: str, options: Options) -> L:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def unload_lib(self, lib: L):
+        raise NotImplementedError
+
+
+    def parse_options(self, benchmark_options: list[str] = None) -> Options:
+        if benchmark_options is None:
+            return {}
+        return {"skip_testing":"--skip_testing" in benchmark_options}
+
+    def run(self, benchmark_options: list[str] = None):
+        options = self.parse_options(benchmark_options)
+        self.log(f"Running benchmark {type(self)} in {self.base_dir}")
+        self.run_benchmarking(options)
+
+    @staticmethod
+    def get_universal_result_parts() -> tuple[tuple[str, type[int]], tuple[str, type[float]], tuple[str, type[float]], tuple[str, type[bool]]]:
+        return ("runs", int), ("time", float), ("waiting_time", float), ("finished", bool)
+
+    @overload
+    def get_test_result_from_list(self, row, only_res: Literal[False] = False) -> tuple[ID_Tuple, int, U_Res_Tuple, Res_Tuple]: ...
+
+    @overload
+    def get_test_result_from_list(self, row, only_res: Literal[True] = False) -> Res_Tuple: ...
+
+    def get_test_result_from_list(self, row, only_res = False) -> tuple[ID_Tuple, int, U_Res_Tuple, Res_Tuple] | Res_Tuple:
+        id_parts = self.test_class.get_id_headings()
+        universal_parts = self.get_universal_result_parts()
+        result_parts = self.test_class.get_result_headings()
+        row_idx = 0
+        test_id: tuple[()] | tuple[str|int|bool, ...] = ()
+        if not only_res:
+            for name, t in id_parts:
+                if t == bool:
+                    if row[row_idx] == "True":
+                        test_id = *test_id, True
+                    elif row[row_idx] == "False":
+                        test_id = *test_id, False
+                    else:
+                        raise ValueError(f"Unexpected value for bool '{name}': '{row[row_idx]}' in row: {row} at {row_idx}")
+                else:
+                    test_id = *test_id, t(row[row_idx])
+                row_idx += 1
+            assert len(test_id) > 0
+            o_id = typing.cast(tuple[str|int|bool, ...], test_id)
+
+            repeat = int(row[row_idx])
+            row_idx += 1
+        else:
+            o_id = None
+            repeat = None
+
+        if not only_res:
+            u_res: tuple[()] | tuple[float|bool, ...] = ()
+            for name, t in universal_parts:
+                if t == bool:
+                    if row[row_idx] == "True":
+                        u_res = *u_res, True
+                    elif row[row_idx] == "False":
+                        u_res = *u_res, False
+                    else:
+                        raise ValueError(f"Unexpected value for bool '{name}': '{row[row_idx]}' in row: {row} at {row_idx}")
+                else:
+                    u_res = *u_res, t(row[row_idx])
+                row_idx += 1
+            assert len(u_res) > 0
+            o_u_res = typing.cast(U_Res_Tuple, u_res)
+        else:
+            o_u_res = None
+
+        res: tuple[()] | tuple[int|bool|float, ...] = ()
+        for name, t in result_parts:
+            if t == bool:
+                if row[row_idx] == "True":
+                    res = *res, True
+                elif row[row_idx] == "False":
+                    res = *res, False
+                else:
+                    raise ValueError(f"Unexpected value for bool '{name}': '{row[row_idx]}' in row: {row} at {row_idx}")
+            else:
+                res = *res, t(row[row_idx])
+            row_idx += 1
+        assert len(res) > 0
+        o_res = typing.cast(tuple[int|bool|float, ...], res)
+
+        if only_res:
+            return o_res
+        else:
+            return o_id, repeat, o_u_res, o_res
+
+    def get_results_path(self)-> str:
+        return f"{self.base_dir}/results.csv"
+
+    def load_existing_results(self) -> Res_Dict:
+        count = self.start_inline_log("Loading from existing results, ","...")
+        results_done = {}
+        results_file = self.get_results_path()
+        if os.path.exists(results_file):
+            with open(results_file, "r", newline="") as f:
+                r = csv.reader(f)
+                next(r, None)  # skip header
+                for row in r:
+                    test_id, rep, u_res, result = self.get_test_result_from_list(row)
+                    results_done[(test_id, rep)] = (u_res, result)
+        else:
+            with open(results_file, "a", newline="") as csv_results:
+                result_writer = csv.writer(csv_results)
+                header = self._get_results_header()
+                result_writer.writerow(header)
+
+        self.end_inline_log(count, f"Found {len(results_done)} results")
+        return results_done
+
+    def get_runs_for_time(self, trial_time: float) -> int:
+        if trial_time < 0:
+            return 0
+        if trial_time > self.settings.waste_of_time_threshold:
+            return 0
+        if trial_time < self.settings.test_too_short_threshold:
+            return self.settings.runs * self.settings.long_run_multiplier
+        return self.settings.runs
+
+    def remove_skipable_tests(self, tests: list[T], results: Res_Dict) -> list[T]:
+        new_tests = []
+        for t in tests:
+            if (t.get_id(), -1) in results:
+                (runs, t_time, w_time, fin), res = results[(t.get_id(), -1)]
+                trial_time = t_time/runs
+                runs_to_do = self.get_runs_for_time(trial_time)
+                if runs_to_do > 0:
+                    for rep in range(self.settings.repeats):
+                        if (t.get_id(), rep) not in results:
+                            new_tests.append(t)
+                            break
+            else:
+                new_tests.append(t)
+        self.log(f"Able to Skip {len(tests) - len(new_tests)} / {len(tests)} of the all the tests")
+        return new_tests
+
+    def _stringify(self, p: str|int|bool|float) -> str:
+        if isinstance(p, str):
+            return p
+        elif isinstance(p, int):
+            return str(p)
+        elif isinstance(p, bool):
+            return "True" if p else "False"
+        elif isinstance(p, float):
+            s = str(p)
+            new_p = float(s)
+            if p != new_p:
+                self.log(f"Turning float '{repr(p)}' into a str '{s}' produced an inconsistency.", error=True)
+            return s
+
+    def _get_results_header(self) -> list[str]:
+        return [s for (s,t) in self.test_class.get_id_headings() + [("repeats", int)] + list(self.get_universal_result_parts()) + self.test_class.get_result_headings()]
+
+    def write_result(self, test: T, repeat: int, u_res: U_Res_Tuple, results: Res_Tuple) -> None:
+        row = []
+        for p in test.get_id():
+            row.append(self._stringify(p))
+        row.append(self._stringify(repeat))
+        for p in u_res:
+            row.append(self._stringify(p))
+        for p in results:
+            row.append(self._stringify(p))
+
+        results_file = self.get_results_path()
+        exists = os.path.exists(results_file)
+        with open(results_file, "a", newline="") as f:
+            result_writer = csv.writer(f)
+            if not exists:
+                header = self._get_results_header()
+                result_writer.writerow(header)
+            result_writer.writerow(row)
+            f.flush()
+
+    def _non_result_for[K](self, heading: list[tuple[str, type[K]]]) -> tuple[K, ...]:
+        new_result = []
+        for n, t in heading:
+            if t == str:
+                new_result.append("")
+            elif t == int:
+                new_result.append(0)
+            elif t == bool:
+                new_result.append(True)
+            elif t == float:
+                new_result.append(0.0)
+            else:
+                raise NotImplementedError(f"{t} not implemented")
+        return tuple(new_result)
+
+
+    def run_benchmarking(self, options: Options) -> None:
+        tests = self.initialise_benchmarks(options)
+
+        loaded_results = self.load_existing_results()
+
+        tests = self.remove_skipable_tests(tests, loaded_results)
+
+        count = 0
+        tests_to_run = len(tests)
+
+        for test in tests:
+            count += 1
+            self.log(f"\tRunning Benchmarks for {test.get_id_str()}. ({count}/{tests_to_run}) : {test.get_test_path(self.get_tests_path())}")
+
+            runs_to_do = self.get_runs_to_do(test, loaded_results, options)
+            if runs_to_do < 1:
+                self.log(f"Skipping test id: ({test.get_id_str()}), as test has {runs_to_do} runs.")
+            else:
+                lib = self.get_lib(test, options)
+                for rep in range(self.settings.repeats):
+                    if (test.get_id(), rep) in loaded_results:
+                        self.log(f"Skipping test id: {test.get_id_str()}, rep: {rep} as it is already in the results file")
+                        continue
+                    char_count = self.start_inline_log(f"Running benchmark repeat :: test id: {test.get_id_str()}, rep: {rep}, runs: {runs_to_do}, ")
+                    if options["skip_testing"]:
+                        self.end_inline_log(char_count, f"Skipping testing")
+                        continue
+                    if lib is None:
+                        self.end_inline_log(char_count, f"Cannot test because lib is None")
+                        continue
+
+                    universal_results, results = (
+                        self.run_test(test, lib, runs_to_do)
+                    )
+                    self.write_result(test, rep, universal_results, results)
+                    runs_done, test_time, wait_time, finished = universal_results
+                    assert runs_done == runs_to_do
+                    self.end_inline_log(char_count, f"time: {test_time}, wait: {wait_time}, finished: {finished}")
+            self.close_lib()
+        print(f"finished")
+
+    def get_runs_to_do(self, test: T, loaded_results: Res_Dict, options: Options) -> int:
+        if (test.get_id(), -1) in loaded_results:
+            (test_runs, test_time, test_w_time, test_fin), test_res = loaded_results[(test.get_id(), -1)]
+            count = self.start_inline_log(f"Trail test result found in loaded results: ", "...")
+        else:
+            lib = self.get_lib(test, options)
+            if lib is None:
+                self.log(f"Cannot trail test because lib is None")
+                return 0
+            if self.settings.benchmark_child_process:
+                count = self.start_inline_log(f"Trail test starting in new process: ")
+                u_res, res = self.run_external_test(test, 1)
+                self.write_result(test, -1, u_res, res)
+                test_runs, test_time, test_w_time, test_fin = u_res
+            else:
+                count = self.start_inline_log(f"Trail test: ", "...")
+                u_res, res = self.run_test(test, lib, 1)
+                self.write_result(test, -1, u_res, res)
+                test_runs, test_time, test_w_time, test_fin = u_res
+        self.end_inline_log(count, f"runs: {test_runs}, time: {test_time}, wait time: {test_w_time}, finished: {test_fin}")
+        trial_time = test_time / test_runs
+        return self.get_runs_for_time(trial_time)
+
+    def run_test(self, test: T, lib: L, runs: int) -> tuple[U_Res_Tuple, Res_Tuple]:
+        start_time = time.time()
+        test_time, res = benchmarkRunner.run_benchmark(lib,
+                                                       runs,
+                                                       self.np_args,
+                                                       self.np_ress,
+                                                       test.code.setup,
+                                                       test.code.benchmark,
+                                                       test.code.test,
+                                                       test.code.clean,
+                                                       test.get_result_headings(),
+                                                       print_updates=True)
+        waiting_time = time.time() - start_time
+        return (runs, test_time, waiting_time, True), res
+
+    def run_external_test(self,  test: T, runs: int) -> tuple[U_Res_Tuple, Res_Tuple]:
+        count = self.inline_log(0, "setting up")
+        args = []
+        args.extend(["python", "benchmarking/benchmarkRunner.py"])
+        args.append(f"{runs}")
+        np_type_map = {np.float32: ":f32", np.float64: ":f64", np.int32: ":i32", np.int64: ":i64"}
+        for np_arg_name, (np_arg_ty, np_arg_path) in self.np_arg_paths.items():
+            args.extend([f"-a{np_type_map[np_arg_ty]}={np_arg_name}", np_arg_path])
+        for np_res_name, (np_res_ty, np_res_path) in self.np_res_paths.items():
+            args.extend([f"-r{np_type_map[np_res_ty]}={np_res_name}", np_res_path])
+
+        for name, type in test.get_result_headings():
+            t = {int: "i", bool: "b", float: "f"}[type]
+            args.append(f"-o:{t}={name}")
+        args.extend(["--load", test.get_load(self.get_tests_path())])
+        args.extend(["--setup", test.code.setup])
+        args.extend(["--benchmark", test.code.benchmark])
+        args.extend(["--test", test.code.test])
+        args.extend(["--clean", test.code.clean])
+
+        current_env = os.environ.copy()
+        count = self.inline_log(count, "starting")
+        start_time = time.time()
+        process_benchmark = subprocess.Popen(
+            args, env=current_env, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+        count = self.inline_log(count, "waiting for benchmark")
+
+        finished = False
+        try:
+            out_bytes, err = process_benchmark.communicate(timeout=self.settings.benchmark_timeout*runs)
+            finished = True
+            waiting_time = time.time() - start_time
+            self.inline_log(count,"finished, ")
+        except subprocess.TimeoutExpired as _:
+            waiting_time = time.time() - start_time
+            count = self.inline_log(count, "timed out")
+            process_benchmark.kill()
+            out_bytes, err = process_benchmark.communicate()
+            self.inline_log(count, "killed, ")
+
+        out = out_bytes.decode("utf8")
+        split_out = out.split("\n")
+        if len(split_out) != 1 + len(test.get_result_headings()) + 1:
+            if finished:
+                self.end_inline_log(count, " ERROR", append=True)
+                self.log(f"{len(split_out)} != 1 + {len(test.get_result_headings())} + 1")
+                self.log(f"Process return code: {process_benchmark.returncode}", error=True)
+                self.log(f" Test finished but output is: {split_out} ", error=True)
+                self.log(f" ERROR: outputs from process:\n out: {out_bytes} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}", error=True)
+                return (runs, -1.0, waiting_time, True), self._non_result_for(test.get_result_headings())
+            else:
+                return (runs, -1.0, waiting_time, False), self._non_result_for(test.get_result_headings())
+
+        try:
+            res_part = split_out[1:-1]
+            res = self.get_test_result_from_list(res_part, only_res=True)
+        except ValueError as e:
+            self.end_inline_log(count, " ERROR", append=True)
+            self.log(f"Process exit code: {process_benchmark.returncode}", error=True)
+            self.log(f" Test finished but output is: {split_out} ", error=True)
+            self.log(
+                f" ERROR: outputs from process:\n out: {out_bytes} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}",
+                error=True)
+            self.log(str(e), error=True)
+            return (runs, -2.0, waiting_time, finished), self._non_result_for(test.get_result_headings())
+
+        u_res = runs, float(split_out[0]), waiting_time, finished
+        return u_res, res
+
+    def get_tests_path(self) -> str:
+        return f"{self.base_dir}/tests"
+
+    def get_lib(self, test: T, options: Options) -> L | None:
+        if self.lib_id != test.get_id():
+            self.close_lib()
+            tests_path = self.get_tests_path()
+            test_path = test.get_test_path(tests_path)
+            lib = self.load_lib(test, test_path, options)
+            self.lib = lib
+            self.lib_id = test.get_id()
+        return self.lib
+
+    def close_lib(self):
+        if self.lib is not None:
+            self.unload_lib(self.lib)
+            self.lib = None
+            assert self.lib_id is not None
+        self.lib_id = None
+
+
+    @overload
+    def search_store(self, store_path: str, key: K, match_function: Callable[[K, K], bool] = None,
+                     lock: Literal[True] = True) -> tuple[Literal[True], int, Any] | tuple[Literal[False], int, str]:
+        ...
+    @overload
+    def search_store(self, store_path: str, key: K, match_function: Callable[[K, K], bool] = None,
+                     lock: Literal[False] = True) -> tuple[Literal[True], int, Any] | tuple[Literal[False], Literal[-1], None]:
+        ...
+    @overload
+    def search_store(self, store_path: str, key: K, match_function: Callable[[K, K], bool] = None,
+                     lock: bool = True) -> tuple[Literal[True], int, Any] | tuple[Literal[False], int, str] | tuple[Literal[False], Literal[-1], None]:
+        ...
+    def search_store(self, store_path: str, key: K, match_function: Callable[[K, K], bool] = None, lock: bool = True) -> tuple[Literal[True], int, Any] | tuple[Literal[False], int, str] | tuple[Literal[False], Literal[-1], None]:
+        if match_function is None:
+            match_function = lambda x, y: x == y
+        store_keys_path = f"{store_path}/keys"
+        store_values_path = f"{store_path}/values"
+        store_gen_path = f"{store_path}/gen"
+        os.makedirs(store_keys_path, exist_ok=True)
+        os.makedirs(store_values_path, exist_ok=True)
+        os.makedirs(store_gen_path, exist_ok=True)
+
+        count = self.start_inline_log(f"Searching store: {store_path}, ", "...")
+        checked_keys = set()
+        files = os.listdir(store_keys_path)
+        for file in files:
+            count = self.inline_log(count, ".", append=True)
+            key_file_name = os.fsdecode(file)
+            is_lock = key_file_name.endswith(".lock")
+            key_int = int(key_file_name.removesuffix(".lock"))
+            checked_keys.add(key_int)
+            is_locked = is_lock or os.path.exists(f"{store_keys_path}/{key_int}.lock")
+
+            if not is_locked:
+                with open(f"{store_keys_path}/{key_int}", "rb") as f:
+                    loaded_key = pickle.load(f)
+                if match_function(key, loaded_key):
+                    count = self.inline_log(count, f"Found matching key: {key_int}, ")
+                    with open(f"{store_values_path}/{key_int}", "rb") as f:
+                        loaded = pickle.load(f)
+                    with open(f"{self.base_dir}/store_use", "a") as f:
+                        f.write(f"{datetime.datetime.now()} Loaded {key_int} from store: {store_path}\n")
+                    self.end_inline_log(count, "Loaded value.", append=True)
+                    return True, key_int, loaded
+
+        self.end_inline_log(count, f"{len(checked_keys)} keys checked, No match found.")
+        if lock:
+            new_key = max(*checked_keys) + 1
+            new_key_str = f"{new_key}?"
+            count = self.start_inline_log(" Attempting to lock key: ", f"{new_key_str}")
+            file_found = False
+            pid = os.getpid()
+            while not file_found:
+                try:
+                    with open(f"{store_keys_path}/{new_key}.lock", "x") as f:
+                        f.write(f"{int(pid)}")
+                    file_found = True
+                except FileExistsError as _:
+                    new_key = new_key + 1
+                    new_key_str = f"{new_key}?"
+                    count = self.inline_log(count, f"{new_key_str}")
+            with open(f"{self.base_dir}/store_use", "a") as f:
+                f.write(f"{datetime.datetime.now()} Locked {new_key} by {int(pid)} from store: {store_path}\n")
+            self.end_inline_log(count, f"{new_key}")
+            new_store_gen_path = f"{store_gen_path}/{new_key}"
+            os.makedirs(new_store_gen_path, exist_ok=True)
+            return False, new_key, new_store_gen_path
+        return False, -1, None
+
+    def write_store(self, store_path: str, key: K, value: Any, key_int: int) -> bool:
+        if key_int < 0:
+            return False
+
+        store_keys_path = f"{store_path}/keys"
+        store_values_path = f"{store_path}/values"
+        store_gen_path = f"{store_path}/gen"
+        os.makedirs(store_keys_path, exist_ok=True)
+        os.makedirs(store_values_path, exist_ok=True)
+        os.makedirs(store_gen_path, exist_ok=True)
+
+        pid = os.getpid()
+        with open(f"{store_keys_path}/{key_int}.lock", "r") as f:
+            lock_pid = int(f.read())
+            if lock_pid != pid:
+                self.log(f"lock pid: {lock_pid} does not match our pid {pid} - something has tampered with the store directory {store_path}", error=True)
+                assert False, f"lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the store directory {store_path}"
+
+        with open(f"{store_values_path}/{key_int}", "wb") as f:
+            f.write(pickle.dumps(value))
+        with open(f"{store_keys_path}/{key_int}", "wb") as f:
+            f.write(pickle.dumps(key))
+        os.remove(f"{store_keys_path}/{key_int}.lock")
+        with open(f"{self.base_dir}/store_use", "a") as f:
+            f.write(f"{datetime.datetime.now()} Unlocked and generated record {key_int} by {int(pid)} from store: {store_path}\n")
+        self.log(f"New key: {key_int}, Added to store: {store_path}")
+        return True
+
+
+    def handle_reference_array(self, array: nptyping.NDArray, array_path: str, is_arg: bool, is_res: bool, scope_name: str, binary: bool = True, dtype: type = np.float32):
         if scope_name is None:
-            scope_name = name
+            scope_name = array_path
         if binary:
-            name += ".npy"
-        path = f"{self.base_dir}/{name}"
+            array_path += ".npy"
+        path = f"{self.base_dir}/{array_path}"
         if os.path.exists(path):
             if binary:
                 loaded_array = np.load(path)
             else:
                 loaded_array = np.loadtxt(path)
             if (array.shape != loaded_array.shape) or (not np.equal(array, loaded_array).all()):
-                print(
-                    f"ERROR! loaded array does not match newly calculated reference array: {path}"
-                )
+                self.log(f"ERROR! loaded array does not match newly calculated reference array: {path}", error=True)
             else:
                 # print(f"Reference array consistent with {path}")
                 pass
         else:
+            dir = os.path.dirname(path)
+            os.makedirs(dir, exist_ok=True)
             if binary:
                 np.save(path, array)
                 np.savetxt(path+".txt", array)
             else:
                 np.savetxt(path, array)
-            print(f"Reference array saved to {path}")
+            self.log(f"Reference array saved to {path}")
         if is_arg:
             assert scope_name not in self.np_arg_paths
             self.np_arg_paths[scope_name] = dtype, path
@@ -125,695 +604,22 @@ class Benchmark(abc.ABC):
             assert scope_name not in self.np_ress
             self.np_ress[scope_name] = array
 
-    @abc.abstractmethod
-    def define_lib_builder(self) -> LibBuilder:
-        raise NotImplementedError
 
-    @abc.abstractmethod
-    def get_configs_for_DTL_tensors(self) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_setup(self) -> str:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_benchmark(self) -> str:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_test(self) -> str:
-        # must define 'correct', 'total_error', 'consistent' in the scope
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_clean(self) -> str:
-        raise NotImplementedError
-
-    def run(self, benchmark_options: list[str] = None):
-        old_skip_testing = self.skip_testing
-        self.skip_testing = "--skip_testing" in benchmark_options
-
-        old_only_compile_to_llvm = self.only_compile_to_llvm
-        self.only_compile_to_llvm = "--only_to_llvm" in benchmark_options
-
-        old_do_not_compile_mlir = self.do_not_compile_mlir
-        self.do_not_compile_mlir = "--no_mlir" in benchmark_options
-
-        old_do_not_lower = self.do_not_lower
-        self.do_not_lower = "--do_not_lower" in benchmark_options
-
-        only_layouts = set()
-        only_orders = set()
-        for arg in benchmark_options:
-            if arg.startswith("-l="):
-                only_layouts.add(int(arg.removeprefix("-l=")))
-            elif arg.startswith("-o="):
-                only_orders.add(int(arg.removeprefix("-o=")))
-        if len(only_layouts) == 0:
-            only_layouts = None
-        if len(only_orders) == 0:
-            only_orders = None
-
-        take_first_layouts = 0
-        take_first_orders = 0
-        for arg in benchmark_options:
-            if arg.startswith("-tfl="):
-                take_first_layouts = int(arg.removeprefix("-tfl="))
-            elif arg.startswith("-tfo="):
-                take_first_orders = int(arg.removeprefix("-tfo="))
-
-        old_take_first_layouts = self.take_first_layouts
-        self.take_first_layouts = take_first_layouts
-        old_take_first_orders = self.take_first_orders
-        self.take_first_orders = take_first_orders
-
-        print(
-            f"{datetime.datetime.now()} Running benchmark {type(self)} at {self.base_dir}"
-        )
-        print(f"{datetime.datetime.now()} Defining lib builder")
-        lib_builder = self.define_lib_builder()
-        print(f"{datetime.datetime.now()} Starting benchmarking...")
-        self.run_benchmarking(lib_builder, only_layouts=only_layouts, only_orders=only_orders)
-
-        self.skip_testing = old_skip_testing
-        self.only_compile_to_llvm = old_only_compile_to_llvm
-        self.do_not_compile_mlir = old_do_not_compile_mlir
-        self.do_not_lower = old_do_not_lower
-        self.take_first_layouts = old_take_first_layouts
-        self.take_first_orders = old_take_first_orders
-
-    def get_compiled_lib(
-        self,
-        new_layout: PtrMapping,
-        new_order: IterationMapping,
-        module: ModuleOp,
-        lib_builder: LibBuilder,
-        layout_graph: LayoutGraph,
-        iteration_map: IterationMap,
-    ) -> tuple[DTLCLib, str, str] | None:
-        print(
-            f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: ",
-            end="",
-        )
-
-        test_name = f"{new_layout.number}.{new_order.number}"
-        test_path = f"{self.base_dir}/tests/{test_name}"
-        os.makedirs(test_path, exist_ok=True)
-
-        lib_name = f"lib_{new_layout.number}_{new_order.number}"
-        llvm_path = f"{test_path}/{lib_name}.ll"
-        lib_path = f"{test_path}/{lib_name}.so"
-        func_types_path = f"{test_path}/{lib_name}.ft"
-        graph_path = f"{test_path}/"
-
-        func_types_exists = os.path.exists(func_types_path)
-        print("func_types: ", end="")
-        if func_types_exists:
-            module_clone = None
-            with open(func_types_path, "rb") as f:
-                function_types_tuple = pickle.load(f)
-                function_types, dlt_func_types = function_types_tuple
-            print("loaded, ", end="")
-        elif not self.do_not_lower:
-            module_clone = module.clone()
-            function_types, dlt_func_types = lib_builder.lower(
-                module_clone,
-                layout_graph,
-                new_layout.make_ptr_dict(),
-                iteration_map,
-                new_order.make_iter_dict(),
-                graph_dir=graph_path,
-                verbose=0,
-            )
-            with open(func_types_path, "wb") as f:
-                f.write(pickle.dumps((function_types, dlt_func_types)))
-            print("made, ", end="")
-        else:
-            print("not found, but do not lower is set")
-            return None
-
-        lib_exists = os.path.exists(lib_path)
-        print("lib: ", end="")
-        if lib_exists:
-            function_types_str = {k.data: v for k, v in function_types.items()}
-            lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
-            print("found.")
-            return lib, lib_path, func_types_path
-        else:
-            print("not found, ", end="")
-
-        llvm_exists = os.path.exists(llvm_path)
-        print("llvm: ", end="")
-        if llvm_exists and self.only_compile_to_llvm:
-            print(f"found & Done.")
-            return None
-        elif not llvm_exists and self.do_not_compile_mlir:
-            print("not found - but do not compile mlir is set.")
-            return None
-        else:
-            if llvm_exists:
-                print(f"found, ", end="")
-                lib = lib_builder.compile_from(
-                    llvm_path,
-                    function_types,
-                    dlt_func_map=dlt_func_types,
-                    lib_path=lib_path,
-                    clang_args=self.get_extra_clang_args(),
-                    verbose=0,
-                )
-                print(f"lib compiled to: {lib_path}")
-                return lib, lib_path, func_types_path
-            else:
-                print("not found, ", end="")
-                if module_clone is None:
-                    print("func_types: ", end="")
-                    module_clone = module.clone()
-                    function_types, dlt_func_types = lib_builder.lower(
-                        module_clone,
-                        layout_graph,
-                        new_layout.make_ptr_dict(),
-                        iteration_map,
-                        new_order.make_iter_dict(),
-                        graph_dir=graph_path,
-                        verbose=0,
-                    )
-                    with open(func_types_path, "wb") as f:
-                        f.write(pickle.dumps((function_types, dlt_func_types)))
-                    print("remade, ", end="")
-
-                print("lib: ", end="")
-                lib = lib_builder.compile(
-                    module_clone,
-                    function_types,
-                    dlt_func_map=dlt_func_types,
-                    llvm_out=llvm_path,
-                    llvm_only=self.only_compile_to_llvm,
-                    lib_path=lib_path,
-                    clang_args=self.get_extra_clang_args(),
-                    verbose=0,
-                )
-                if lib is not None:
-                    print(
-                        f"compiled to binary. LLVM: {llvm_path}, lib: {lib._library_path}"
-                    )
-                    return lib, lib_path, func_types_path
-                else:
-                    print(f"compiled to LLVM: {llvm_path} but no lib was produced.")
-                    return None
-
-    def get_test_id_from_row(self, row) -> tuple[tuple, int, tuple[int, float]]:
-        layout_num = int(row[0])
-        order_num = int(row[1])
-        rep = int(row[2])
-        runs = int(row[3])
-        time = float(row[4])
-        correct = row[5] == "True"
-        mean_error = float(row[6])
-        consistent = row[7] == "True"
-        waiting_time = float(row[8])
-        finished = row[9] == "True"
-        return (layout_num, order_num), rep, (runs, time)
-
-    def get_test_id(self, layout_num, order_num) -> tuple:
-        return (layout_num, order_num)
-
-    def get_results_header(self):
-        return [
-            "layout_mapping",
-            "iter_mapping",
-            "rep",
-            "runs",
-            "time",
-            "correct",
-            "mean_error",
-            "consistent",
-            "waiting_time",
-            "finished"
-        ]
-
-    def run_benchmarking(self, lib_builder: LibBuilder, only_layouts: set[int]|None = None, only_orders: set[int]|None = None) -> None:
-        module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
-
-        print(
-            f"{datetime.datetime.now()} Generating possible layouts and iteration maps"
-        )
-        layouts, orders = self._generate_versions(layout_graph, iteration_map, lib_builder)
-        if self.only_generate:
-            print("Only Generate is set, so benchmarking is ending.")
-            return
-
-        print(f"{datetime.datetime.now()} Loading from existing results")
-        results_done = {}
-
-        results_file = f"{self.base_dir}/results.csv"
-        if os.path.exists(results_file):
-            with open(results_file, "r", newline="") as f:
-                r = csv.reader(f)
-                next(r, None)  # skip header
-                for row in r:
-                    test_id, rep, result = self.get_test_id_from_row(row)
-                    results_done[(*test_id, rep)] = result
-        print(f"{datetime.datetime.now()} Found {len(results_done)} results")
-
-        write_results_header = not os.path.exists(results_file)
-        results_correct = True
-
-        with open(results_file, "a", newline="") as csv_results:
-            result_writer = csv.writer(csv_results)
-            if write_results_header:
-                result_writer.writerow(
-                    self.get_results_header()
-                )
-
-            count = 0
-
-            if only_layouts is not None:
-                print(f"{datetime.datetime.now()} Running only layouts: {only_layouts}")
-                layouts = {l for l in layouts if l.number in only_layouts}
-            if only_orders is not None:
-                print(f"{datetime.datetime.now()} Running only orders: {only_orders}")
-                orders = {o for o in orders if o.number in only_orders}
-
-            layouts = sorted(list(layouts), key=(lambda l: l.number))
-            orders = sorted(list(orders), key=(lambda o: o.number))
-
-            layouts_skipped = set()
-            for l in layouts:
-                if self.skip_layout(l):
-                    layouts_skipped.add(l.number)
-            if len(layouts_skipped) > 0:
-                list_of_l = ','.join([str(l) for l in list(layouts_skipped)[:10]]) + (", ..." if len(layouts_skipped)>10 else "")
-                print(f"{datetime.datetime.now()} Skipping {len(layouts_skipped)} layouts that are considered not worth testing: [{list_of_l}]")
-                layouts = {l for l in layouts if l.number not in layouts_skipped}
-
-            orders_skipped = set()
-            for o in orders:
-                if self.skip_order(o):
-                    orders_skipped.add(o.number)
-            if len(orders_skipped) > 0:
-                list_of_o = ','.join([str(o) for o in list(orders_skipped)[:10]]) + (
-                    ", ..." if len(orders_skipped) > 10 else "")
-                print(
-                    f"{datetime.datetime.now()} Skipping {len(orders_skipped)} orders that are considered not worth testing: [{list_of_o}]")
-                orders = {o for o in orders if o.number not in orders_skipped}
-
-            total_l_o_pairs = len(layouts) * len(orders)
-
-            for new_layout in layouts:
-                for new_order in orders:
-                    count += 1
-                    test_id = self.get_test_id(new_layout.number, new_order.number)
-                    print(
-                        f"{datetime.datetime.now()} Running Benchmarks for {test_id}. ({count}/{total_l_o_pairs})"
-                    )
-
-                    if all(
-                        (*test_id, rep) in results_done
-                        for rep in range(-1, self.repeats)
-                    ):
-                        print(
-                            f"{datetime.datetime.now()} Skipping layout: {new_layout.number}, order: {new_order.number} for all repeats [0..{self.repeats}) as they are already in the results file"
-                        )
-                        continue
-
-                    t_result = None
-                    runs_to_do = self.runs
-
-                    if (*test_id, -1) in results_done:
-                        t_r, test_time_result = results_done[(*test_id, -1)]
-                        t_result = test_time_result / t_r
-                        if test_time_result < 0 or t_result > self.waste_of_time_threshold:
-                            print(
-                                f"{datetime.datetime.now()} Skipping {test_id} for all repeats [0..{self.repeats}) as the test time was {t_result}"
-                            )
-                            continue
-                        elif t_result < self.test_too_short_threshold:
-                            runs_to_do = self.runs * self.long_run_multiplier
-                            print(
-                                f"Test result found ({t_result}) and runs set to: {self.runs}*{self.long_run_multiplier}={runs_to_do}"
-                            )
-                        else:
-                            print(
-                                f"Test result found ({t_result}) and runs set to: {runs_to_do}"
-                            )
-
-                    compiled_lib = self.get_compiled_lib(
-                        new_layout,
-                        new_order,
-                        module,
-                        lib_builder,
-                        layout_graph,
-                        iteration_map,
-                    )
-
-                    if t_result is None:
-                        print(
-                            f"{datetime.datetime.now()} testing :: test id: {test_id} to check if time is reasonable: ",
-                            end = ""
-                        )
-                        if self.skip_testing:
-                            print(f"Skipping testing")
-                        elif compiled_lib is None:
-                            print(f"Cannot test because lib is none")
-                        else:
-                            t_result, t_correct, t_mean_error, t_consistent, t_waiting_time, t_finished  = (
-                                self._run_benchmark(compiled_lib, runs = 1, test_run=True)
-                            )
-                            result_writer.writerow(
-                                [
-                                    *test_id,
-                                    -1,
-                                    1,
-                                    t_result,
-                                    t_correct,
-                                    t_mean_error,
-                                    t_consistent,
-                                    t_waiting_time,
-                                    t_finished
-                                ]
-                            )
-                            csv_results.flush()
-                            results_correct &= t_correct
-                            print(
-                                f" ==>  result: {t_result}, correct: {t_correct}, mean error: {t_mean_error}, consistent: {t_consistent}, waiting time: {t_waiting_time}, finished: {t_finished} :: ",
-                                end = ""
-                            )
-                            if not t_finished or t_result < 0 or t_result > self.waste_of_time_threshold:
-                                print(
-                                    f"Test time too long - Skipping"
-                                )
-                                continue
-                            elif t_result < self.test_too_short_threshold:
-                                runs_to_do = self.runs * self.long_run_multiplier
-                                print(
-                                    f"Runs set to: {self.runs}*{self.long_run_multiplier}={runs_to_do}"
-                                )
-                            else:
-                                print(
-                                    f"Runs set to: {runs_to_do}"
-                                )
-
-
-                    for rep in range(self.repeats):
-                        if (*test_id, rep) in results_done:
-                            print(
-                                f"Skipping test id: {test_id}, rep: {rep} as it is already in the results file"
-                            )
-                            continue
-                        print(
-                            f"{datetime.datetime.now()} Running benchmark repeat :: test id: {test_id}, rep: {rep} ",
-                            end="",
-                        )
-
-                        if self.skip_testing:
-                            print(f"Skipping testing")
-                        elif compiled_lib is None:
-                            print(f"Cannot test because lib is none")
-                        else:
-                            result, correct, mean_error, consistent, waiting_time, finished = (
-                                self._run_benchmark(compiled_lib, runs_to_do, test_run=False)
-                            )
-                            result_writer.writerow(
-                                [
-                                    *test_id,
-                                    rep,
-                                    runs_to_do,
-                                    result,
-                                    correct,
-                                    mean_error,
-                                    consistent,
-                                    waiting_time,
-                                    finished
-                                ]
-                            )
-                            csv_results.flush()
-                            results_correct &= correct
-                            print(
-                                f" ==>  result: {result}, correct: {correct}, mean error: {mean_error}, consistent: {consistent}, waiting time: {waiting_time}, finished {finished}"
-                            )
-                    if compiled_lib is not None:
-                        lib = compiled_lib[0]
-                        lib._close(delete=False)
-        print(f"finished - results all correct: {results_correct}")
-
-
-    def _run_benchmark(self, lib_paths: tuple[DTLCLib, str, str], runs: int, test_run: bool = False) -> tuple[
-        float, bool, float, bool, float, bool]:
-        lib, lib_path, func_types_path = lib_paths
-        if self.benchmark_child_process and test_run:
-            return self._run_benchmark_external(lib_path, func_types_path, runs)
-        start_time = time.time()
-        result, correct, mean_error, consistent =  benchmarkRunner.run_benchmark(lib, runs, self.np_args, self.np_ress, self.get_setup(), self.get_benchmark(), self.get_test(), self.get_clean(), print_updates=True)
-        waiting_time = time.time() - start_time
-        return result, correct, mean_error, consistent, waiting_time, True
-
-    def _run_benchmark_external(self,  lib_path: str, func_types_path: str, runs: int) -> tuple[float, bool, float, bool, float, bool]:
-        chars = inline_print(0, "setting up")
-        args = []
-        args.extend(["python", "benchmarking/benchmarkRunner.py"])
-        args.extend([lib_path, func_types_path])
-        args.append(f"{runs}")
-        np_type_map = {np.float32: ":f32", np.float64: ":f64", np.int32: ":i32", np.int64: ":i64"}
-        for np_arg_name, (np_arg_ty, np_arg_path) in self.np_arg_paths.items():
-            args.extend([f"-a{np_type_map[np_arg_ty]}={np_arg_name}", np_arg_path])
-        for np_res_name, (np_res_ty, np_res_path) in self.np_res_paths.items():
-            args.extend([f"-r{np_type_map[np_res_ty]}={np_res_name}", np_res_path])
-        args.extend(["--setup", self.get_setup()])
-        args.extend(["--benchmark", self.get_benchmark()])
-        args.extend(["--test", self.get_test()])
-        args.extend(["--clean", self.get_clean()])
-
-        current_env = os.environ.copy()
-
-        start_time = time.time()
-        process_benchmark = subprocess.Popen(
-            args, env=current_env, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-        )
-        chars = inline_print(chars, "waiting for benchmark")
-
-        finished = False
-        try:
-            out_bytes, err = process_benchmark.communicate(timeout=self.benchmark_timeout*runs)
-            finished = True
-            waiting_time = time.time() - start_time
-            chars = inline_print(chars, "finished")
-        except subprocess.TimeoutExpired as e:
-            waiting_time = time.time() - start_time
-            chars = inline_print(chars, "timed out")
-            process_benchmark.kill()
-            out_bytes, err = process_benchmark.communicate()
-            chars = inline_print(chars, "killed")
-
-        out = out_bytes.decode("utf8")
-        split_out = out.split("\n")
-        if len(split_out) != 5:
-            if finished:
-                print(f" ERROR: test finished but output is: {split_out} ")
-                print(f" ERROR: outputs from process:\n out: {out_bytes} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}")
-                return (-1.0, False, -1.0, False, waiting_time, True)
-            else:
-                return (-1.0, True, -1.0, True, waiting_time, False)
-        result = float(split_out[0])
-        correct = bool(split_out[1] == "True")
-        mean_error = float(split_out[2])
-        consistent = bool(split_out[3] == "True")
-        last_check = split_out[4] == ""
-        if not last_check:
-            return (-2.0, False, -2.0, False, waiting_time, finished)
-        return (result, correct, mean_error, consistent, waiting_time, finished)
-
-    def _generate_versions(
-        self, layout_graph: LayoutGraph, iteration_map: IterationMap, lib_builder: LibBuilder,
-    ) -> tuple[list[PtrMapping], list[IterationMapping]]:
-
-        layout_store_keys = f"{self.layout_store}/keys"
-        os.makedirs(layout_store_keys, exist_ok=True)
-        layout_store_values = f"{self.layout_store}/values"
-        os.makedirs(layout_store_values, exist_ok=True)
-
-        loaded_layouts = None
-        max_key = -1
-        count = 0
-        checked_keys = set()
-        files = os.listdir(layout_store_keys)
-        for file in files:
-            print(".", end="")
-            count += 1
-
-            key_file_name = os.fsdecode(file)
-            is_locked = key_file_name.endswith(".lock")
-            key_int = int(key_file_name.removesuffix(".lock"))
-            checked_keys.add(key_int)
-            if not is_locked:
-                is_locked = os.path.exists(f"{layout_store_keys}/{key_int}.lock")
-            max_key = max(max_key, key_int)
-            if not is_locked:
-                with open(f"{layout_store_keys}/{key_int}", "rb") as f:
-                    loaded_layout_graph = pickle.load(f)
-                if layout_graph.matches(loaded_layout_graph):
-                    print(
-                        f"{'\b' * count}Found matching layout graph in layout store: {key_int}"
-                    )
-                    with open(f"{layout_store_values}/{key_int}", "rb") as f:
-                        loaded_layouts = pickle.load(f)
-                    with open(f"{self.base_dir}/layout", "a") as f:
-                        f.write(f"{datetime.datetime.now()} Using Loaded layouts {key_int} from layouts store\n")
-                    break
-
-        if loaded_layouts is None and not self.do_not_generate:
-            new_key = max_key + 1
-            print("\b" * count, end="")
-            new_key_str = f"{new_key}?"
-            count = len(new_key_str)
-            print(
-                f"No matching layout graph found after checking {len(checked_keys)} graphs. Generating from scratch as {new_key_str}", end=""
-            )
-
-            file_found = False
-            pid = os.getpid()
-            while not file_found:
-                try:
-                    with open(f"{layout_store_keys}/{new_key}.lock", "x") as f:
-                        f.write(f"{int(pid)}")
-                    file_found = True
-                except FileExistsError as e:
-                    new_key = new_key + 1
-                    new_key_str = f"{new_key}?"
-                    print(f"{'\b'*count}{new_key_str}")
-            print("\b")
-
-            dtl_config_map: dict[TupleStruct[TensorVariable], ReifyConfig] = self.get_configs_for_DTL_tensors()
-            config_map = {}
-            for tensor_var, config in dtl_config_map.items():
-                assert tensor_var in lib_builder.tensor_var_details
-                ident = lib_builder.get_base_version_for_ptr(lib_builder.tensor_var_details[tensor_var]).identification
-                closure = layout_graph.get_transitive_closure(ident)
-                for i in closure:
-                    assert i not in config_map
-                    config_map[i] = config
-
-            new_layouts = LayoutGenerator(
-                layout_graph, config_map, plot_dir=f"{self.layout_store}/gen/{new_key}"
-            ).generate_mappings(take_first=self.take_first_layouts)
-            print("Writing new layouts to pickle")
-
-            with open(f"{layout_store_keys}/{new_key}.lock", "r") as f:
-                lock_pid = int(f.read())
-                if lock_pid != pid:
-                    print(f"ERROR: lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the layouts store directory")
-                    assert False, f"lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the layouts store directory"
-            with open(f"{layout_store_values}/{new_key}", "wb") as f:
-                f.write(pickle.dumps(new_layouts))
-            with open(f"{layout_store_keys}/{new_key}", "wb") as f:
-                f.write(pickle.dumps(layout_graph))
-            loaded_layouts = new_layouts
-            os.remove(f"{layout_store_keys}/{new_key}.lock")
-            with open(f"{self.base_dir}/layout", "a") as f:
-                f.write(f"{datetime.datetime.now()} Generated Layouts as {new_key} in layouts store\n")
-
-        order_store_keys = f"{self.order_store}/keys"
-        os.makedirs(order_store_keys, exist_ok=True)
-        order_store_values = f"{self.order_store}/values"
-        os.makedirs(order_store_values, exist_ok=True)
-
-        loaded_orders = None
-        max_key = -1
-        count = 0
-        checked_keys = set()
-        for file in os.listdir(order_store_keys):
-            print(".", end="")
-            count += 1
-
-            key_file_name = os.fsdecode(file)
-            is_locked = key_file_name.endswith(".lock")
-            key_int = int(key_file_name.removesuffix(".lock"))
-            checked_keys.add(key_int)
-            if not is_locked:
-                is_locked = os.path.exists(f"{order_store_keys}/{key_int}.lock")
-            max_key = max(max_key, key_int)
-            if not is_locked:
-                with open(f"{order_store_keys}/{key_file_name}", "rb") as f:
-                    loaded_iteration_map = pickle.load(f)
-                if iteration_map.matches(loaded_iteration_map):
-                    print(
-                        f"{'\b' * count}Found matching iteration map in order store: {key_int}"
-                    )
-                    with open(f"{order_store_values}/{key_file_name}", "rb") as f:
-                        loaded_orders = pickle.load(f)
-                    with open(f"{self.base_dir}/order", "a") as f:
-                        f.write(f"{datetime.datetime.now()} Using Loaded orders {key_int} from orders store\n")
-                    break
-
-        if loaded_orders is None and not self.do_not_generate:
-            new_key = max_key + 1
-            print("\b" * count, end="")
-            new_key_str = f"{new_key}?"
-            count = len(new_key_str)
-            print(
-                f"No matching iteration map found after checking {len(checked_keys)} maps. Generating from scratch as {new_key_str}"
-            )
-
-            file_found = False
-            pid = os.getpid()
-            while not file_found:
-                try:
-                    with open(f"{order_store_keys}/{new_key}.lock", "x") as f:
-                        f.write(f"{int(pid)}")
-                    file_found = True
-                except FileExistsError as e:
-                    new_key = new_key + 1
-                    new_key_str = f"{new_key}?"
-                    print(f"{'\b'*count}{new_key_str}", end="")
-            print("\b")
-
-            new_orders = IterationGenerator(
-                iteration_map, plot_dir=f"{self.order_store}/gen/{new_key}"
-            ).generate_mappings(take_first=self.take_first_orders)
-            print("Writing new orders to pickle")
-
-            with open(f"{order_store_keys}/{new_key}.lock", "r") as f:
-                lock_pid = int(f.read())
-                if lock_pid != pid:
-                    print(
-                        f"ERROR: lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the orders store directory")
-                    assert False, f"lock pid: {lock_pid} does not match out pid {pid} - something has tampered with the orders store directory"
-
-            with open(f"{order_store_values}/{new_key}", "wb") as f:
-                f.write(pickle.dumps(new_orders))
-            with open(f"{order_store_keys}/{new_key}", "wb") as f:
-                f.write(pickle.dumps(iteration_map))
-            loaded_orders = new_orders
-            os.remove(f"{order_store_keys}/{new_key}.lock")
-            with open(f"{self.base_dir}/order", "a") as f:
-                f.write(f"{datetime.datetime.now()} Generated orders as {new_key} in orders store\n")
-
-        if loaded_layouts is None:
-            print("loaded_layouts is none! Probably because do_not_generate is set")
-            loaded_layouts = []
-        if loaded_orders is None:
-            print("loaded_orders is none! Probably because do_not_generate is set")
-            loaded_orders = []
-
-        new_layouts = list(loaded_layouts)
-        new_orders = list(loaded_orders)
-        return new_layouts, new_orders
-
-    @staticmethod
-    def _print_to_str(module: ModuleOp) -> str:
-        res = StringIO()
-        printer = Printer(print_generic_format=False, stream=res)
-        printer.print(module)
-        return res.getvalue()
-
-    def skip_layout(self, l: PtrMapping) -> bool:
-        return False
-
-    def skip_order(self, o: IterationMapping) -> bool:
-        return False
-
-
-def inline_print(chars: int, string: str) -> int:
-    print(("\b" * chars) + string, end="")
-    return len(string)
+    def log(self, string: str, error:bool = False):
+        print(f"{datetime.datetime.now()}: {"ERROR: " if error else ""}{string}")
+
+    def start_inline_log(self, string: str, temp: str = "") -> int:
+        print(f"{datetime.datetime.now()}: {string}{temp}", end="")
+        return len(temp)
+
+    def inline_log(self, chars: int, string: str, append: bool = False) -> int:
+        if not append:
+            print("\b"*chars, end="")
+            chars = 0
+        print(string, end="")
+        return chars+len(string)
+
+    def end_inline_log(self, chars: int, string: str, append: bool = False):
+        if not append:
+            print("\b" * chars, end="")
+        print(string)

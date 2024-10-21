@@ -1,18 +1,14 @@
 import os
-import pickle
 import sys
 from timeit import timeit
 
 import numpy as np
 
-from dtl.libBuilder import DTLCLib, FuncTypeDescriptor
-from xdsl.dialects.builtin import FunctionType, StringAttr
-
 def inline_print(chars: int, string: str) -> int:
     print(("\b" * chars) + string, end="")
     return len(string)
 
-def run_benchmark(lib: DTLCLib, runs: int, np_arg_arrays: dict[str, np.ndarray], np_res_arrays: dict[str, np.ndarray], setup_code: str, benchmark_code: str, test_code: str, clean_code: str, print_updates: bool = False):
+def run_benchmark(lib, runs: int, np_arg_arrays: dict[str, np.ndarray], np_res_arrays: dict[str, np.ndarray], setup_code: str, benchmark_code: str, test_code: str, clean_code: str, result_variables: list[tuple[str, type[int]|type[bool]|type[float]]], print_updates: bool = False):
     chars = 0
     if print_updates:
         chars = inline_print(chars, "setting up: ")
@@ -39,9 +35,15 @@ def run_benchmark(lib: DTLCLib, runs: int, np_arg_arrays: dict[str, np.ndarray],
 
     if print_updates:
         chars = inline_print(chars, "testing result: ")
-    correct = True
-    consistent = True
-    total_error = 0.0
+
+    results = {}
+    for n, t in result_variables:
+        if t == int:
+            results[n] = 0
+        elif t == bool:
+            results[n] = True
+        elif t == float:
+            results[n] = 0.0
 
     first_scope = benchmark_scopes[0]
 
@@ -51,14 +53,16 @@ def run_benchmark(lib: DTLCLib, runs: int, np_arg_arrays: dict[str, np.ndarray],
             i_chars = inline_print(i_chars, f"{i}")
         test_scope = scope | np_res_arrays | {"f_"+k:v for k,v in first_scope.items() if k != "lib"}
         exec(test_code, test_scope)
-        correct &= test_scope["correct"]
-        consistent &= test_scope["consistent"]
-        total_error += test_scope["total_error"]
+
+        for (n, t) in result_variables:
+            if t == int:
+                results[n] += t(test_scope[n])
+            elif t == bool:
+                results[n] &= t(test_scope[n])
+            elif t == float:
+                results[n] += t(test_scope[n])
     if print_updates:
         inline_print(i_chars, "")
-
-
-    mean_error = total_error / runs
 
     if print_updates:
         chars = inline_print(chars, "cleaning: ")
@@ -73,44 +77,43 @@ def run_benchmark(lib: DTLCLib, runs: int, np_arg_arrays: dict[str, np.ndarray],
     if print_updates:
         inline_print(chars, "")
 
-    return result, correct, mean_error, consistent
+    return result, tuple([results[n] for n,t in result_variables])
 
 if __name__ == '__main__':
+    arg_idx = 1
 
-    assert len(sys.argv) > 3
     # called script
-    # lib to load
-    lib_path = sys.argv[1]
-    # func_types to load
-    func_types_path = sys.argv[2]
     # runs to do
-    runs = int(sys.argv[3])
+    runs = int(sys.argv[arg_idx])
+    arg_idx += 1
 
-    assert os.path.exists(func_types_path)
-    with open(func_types_path, "rb") as f:
-        function_types_tuple = pickle.load(f)
-        function_types, dlt_func_types = function_types_tuple
-        assert isinstance(function_types, dict)
-        assert isinstance(dlt_func_types, dict)
-        for k, v in function_types.items():
-            assert isinstance(k, StringAttr)
-            assert isinstance(v, FunctionType)
-        for k, v in dlt_func_types.items():
-            assert isinstance(k, str)
-            assert isinstance(v, FuncTypeDescriptor)
-
-    assert os.path.exists(lib_path)
-    function_types_str = {k.data: v for k, v in function_types.items()}
-    lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
+    # assert os.path.exists(func_types_path)
+    # with open(func_types_path, "rb") as f:
+    #     function_types_tuple = pickle.load(f)
+    #     function_types, dlt_func_types = function_types_tuple
+    #     assert isinstance(function_types, dict)
+    #     assert isinstance(dlt_func_types, dict)
+    #     for k, v in function_types.items():
+    #         assert isinstance(k, StringAttr)
+    #         assert isinstance(v, FunctionType)
+    #     for k, v in dlt_func_types.items():
+    #         assert isinstance(k, str)
+    #         assert isinstance(v, FuncTypeDescriptor)
+    #
+    # assert os.path.exists(lib_path)
+    # function_types_str = {k.data: v for k, v in function_types.items()}
+    # lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
 
     np_arg_paths: dict[str, tuple[type, str]] = {}
     np_res_paths: dict[str, tuple[type, str]] = {}
+    load_code = None
     setup_code = None
     benchmark_code = None
     test_code = None
     clean_code = None
+    result_variables = []
 
-    args = list(sys.argv[4:])
+    args = list(sys.argv[arg_idx:])
     while len(args) > 0:
         arg = args.pop(0)
         found = False
@@ -125,6 +128,16 @@ if __name__ == '__main__':
                 break
         if found:
             continue
+        for t, ty in [("i", int), ("b", bool), ("f", float)]:
+            if arg.startswith(f"-o:{t}="):
+                name = arg.removeprefix(f"-o:{t}=")
+                result_variables.append((name, ty))
+                found = True
+                break
+        if found:
+            continue
+        if arg == "--load":
+            load_code = args.pop(0).replace("\\n", "\n")
         elif arg == "--setup":
             setup_code = args.pop(0).replace("\\n", "\n")
         elif arg == "--benchmark":
@@ -136,6 +149,7 @@ if __name__ == '__main__':
         else:
             raise ValueError(f"sys arg {arg} not recognized. From {sys.argv}")
 
+    assert load_code is not None
     assert setup_code is not None
     assert benchmark_code is not None
     assert test_code is not None
@@ -149,6 +163,7 @@ if __name__ == '__main__':
         else:
             loaded_array = np.loadtxt(path).astype(ty)
         np_arg_arrays[name] = loaded_array
+        # print(f"Loaded {name} : {ty} : {path}")
 
     np_res_arrays = {}
     for name, (ty, path) in np_res_paths.items():
@@ -158,12 +173,15 @@ if __name__ == '__main__':
         else:
             loaded_array = np.loadtxt(path).astype(ty)
         np_res_arrays[name] = loaded_array
-
-    result, correct, mean_error, consistent = run_benchmark(lib, runs, np_arg_arrays, np_res_arrays, setup_code, benchmark_code, test_code, clean_code)
-
-    print(result)
-    print(correct)
-    print(mean_error)
-    print(consistent)
+        # print(f"Loaded {name} : {ty} : {path}")
 
 
+    scope = {}
+    exec(load_code, scope)
+    lib = scope["lib"]
+
+    result_time, results = run_benchmark(lib, runs, np_arg_arrays, np_res_arrays, setup_code, benchmark_code, test_code, clean_code, result_variables)
+
+    print(result_time)
+    for r in results:
+        print(r)

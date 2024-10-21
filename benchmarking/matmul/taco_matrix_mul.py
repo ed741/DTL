@@ -6,8 +6,12 @@ from typing import Any, Generic
 
 import numpy as np
 
-from benchmarking.matmul.matrix_mul_code import make_dense_np_arrays, matmul_single_code
-from benchmarking.benchmark import BenchmarkSettings, ID_Tuple
+from benchmarking.matmul.matrix_mul_code import (
+    make_dense_np_arrays,
+    make_random_sparse_np_arrays,
+    matmul_single_code,
+)
+from benchmarking.benchmark import BenchmarkSettings, ID_Tuple, TestCode
 from dtl.libBuilder import FuncTypeDescriptor, NpArrayCtype, StructType
 from benchmarking.tacoBenchmark import T_Taco, TacoBenchmark, TacoTest, TypeMap
 from xdsl.dialects import llvm
@@ -207,6 +211,154 @@ class Single(MatMulDenseTaco[MatMulDenseTacoTest]):
         return function_types, function_type_descriptor
 
 
+class MatMulSparseTacoTest(TacoTest):
+
+    def __init__(
+        self,
+        code: TestCode,
+        taco_path: str,
+        cpp_path: str,
+        type_mapping: TypeMap,
+        rate_a: float,
+        rate_b: float,
+    ):
+        super().__init__(code, taco_path, cpp_path, type_mapping)
+        self.rate_a = rate_a
+        self.rate_b = rate_b
+
+    @classmethod
+    def get_id_headings(cls) -> list[tuple[str, type[str] | type[int] | type[bool]]]:
+        return super().get_id_headings() + [("rate_a", str), ("rate_b", str)]
+
+    def get_id(self) -> ID_Tuple:
+        return tuple([*super().get_id(), str(self.rate_a), str(self.rate_b)])
+
+
+class RandomSparseSingle(MatMulDenseTaco[MatMulSparseTacoTest]):
+
+    def __init__(
+        self,
+        i: int,
+        j: int,
+        k: int,
+        seed: int,
+        rate_a: float,
+        rate_b: float,
+        base_dir: str,
+        opt_num: int,
+        epsilon: float,
+        settings: BenchmarkSettings,
+    ):
+        super().__init__(i, j, k, seed, base_dir, opt_num, epsilon, settings)
+        self.rate_a = rate_a
+        self.rate_b = rate_b
+
+    def get_self_name(self) -> str:
+        return "random_sparse"
+
+    def make_tests_for(self, type_map: TypeMap) -> list[T_Taco]:
+        return [
+            MatMulSparseTacoTest(
+                matmul_single_code,
+                self.taco_path,
+                f"./benchmarking/taco/matmul/single.cpp",
+                type_map,
+                self.rate_a,
+                self.rate_b,
+            )
+        ]
+
+    def test_data_variant_name(self) -> str:
+        return super().test_data_variant_name() + f"{self.rate_a}_{self.rate_b}"
+
+    def make_abc(self, r: Random) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return make_random_sparse_np_arrays(
+            r, self.i, self.j, self.k, self.rate_a, self.rate_b
+        )
+
+    def make_func_types(
+        self,
+    ) -> tuple[dict[StringAttr, FunctionType], dict[str, FuncTypeDescriptor]]:
+        DLT_Ptr_LLVM_Struct = llvm.LLVMStructType.from_type_list(
+            [llvm.LLVMPointerType.opaque()]
+        )
+        dummy_dlt_ptr = dlt.PtrType(dlt.TypeType([({}, [], f32)]))
+        function_types = {}
+        function_type_descriptor = {}
+
+        function_types["init_A"] = FunctionType.from_lists(
+            [], [DLT_Ptr_LLVM_Struct, DLT_Ptr_LLVM_Struct]
+        )
+        function_type_descriptor["init_A"] = FuncTypeDescriptor(
+            [], [dummy_dlt_ptr, dummy_dlt_ptr], (1, 1)
+        )
+        function_types["init_B"] = FunctionType.from_lists(
+            [], [DLT_Ptr_LLVM_Struct, DLT_Ptr_LLVM_Struct]
+        )
+        function_type_descriptor["init_B"] = FuncTypeDescriptor(
+            [], [dummy_dlt_ptr, dummy_dlt_ptr], (1, 1)
+        )
+        function_types["init_C"] = FunctionType.from_lists(
+            [], [DLT_Ptr_LLVM_Struct, DLT_Ptr_LLVM_Struct]
+        )
+        function_type_descriptor["init_C"] = FuncTypeDescriptor(
+            [], [dummy_dlt_ptr, dummy_dlt_ptr], (1, 1)
+        )
+
+        function_types["setup_A"] = FunctionType.from_lists(
+            [DLT_Ptr_LLVM_Struct, llvm.LLVMPointerType.opaque()], []
+        )
+        function_type_descriptor["setup_A"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr, NpArrayCtype((self.i, self.j))], [], None
+        )
+        function_types["setup_B"] = FunctionType.from_lists(
+            [DLT_Ptr_LLVM_Struct, llvm.LLVMPointerType.opaque()], []
+        )
+        function_type_descriptor["setup_B"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr, NpArrayCtype((self.j, self.k))], [], None
+        )
+
+        function_types["prepare"] = FunctionType.from_lists(
+            [DLT_Ptr_LLVM_Struct, DLT_Ptr_LLVM_Struct, DLT_Ptr_LLVM_Struct], []
+        )
+        function_type_descriptor["prepare"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr, dummy_dlt_ptr, dummy_dlt_ptr], [], None
+        )
+
+        function_types["matmul"] = FunctionType.from_lists(
+            [DLT_Ptr_LLVM_Struct, DLT_Ptr_LLVM_Struct, DLT_Ptr_LLVM_Struct], []
+        )
+        function_type_descriptor["matmul"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr, dummy_dlt_ptr, dummy_dlt_ptr], [], None
+        )
+
+        function_types["check_C"] = FunctionType.from_lists(
+            [DLT_Ptr_LLVM_Struct, llvm.LLVMPointerType.opaque(), DLT_Ptr_LLVM_Struct],
+            [i64, f32, i64],
+        )
+        function_type_descriptor["check_C"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr, NpArrayCtype((self.i, self.k)), dummy_dlt_ptr],
+            [i64, f32, i64],
+            None,
+        )
+
+        function_types["dealloc_A"] = FunctionType.from_lists([DLT_Ptr_LLVM_Struct], [])
+        function_type_descriptor["dealloc_A"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr], [], None
+        )
+        function_types["dealloc_B"] = FunctionType.from_lists([DLT_Ptr_LLVM_Struct], [])
+        function_type_descriptor["dealloc_B"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr], [], None
+        )
+        function_types["dealloc_C"] = FunctionType.from_lists([DLT_Ptr_LLVM_Struct], [])
+        function_type_descriptor["dealloc_C"] = FuncTypeDescriptor(
+            [dummy_dlt_ptr], [], None
+        )
+
+        function_types = {StringAttr(n): f for n, f in function_types.items()}
+        return function_types, function_type_descriptor
+
+
 if __name__ == "__main__":
 
     repeats = 3
@@ -233,14 +385,30 @@ if __name__ == "__main__":
         benchmark_timeout=3.0,
         benchmark_child_process=False,
     )
-
+    base_directory = "./results"
     if len(sys.argv) == 1 or "1" in sys.argv:
-
         benchmarks.append(
-            Single(128, 128, 128, 0, "./results", 3, _Epsilon, settings_128)
+            Single(128, 128, 128, 0, base_directory, 3, _Epsilon, settings_128)
         )
     if len(sys.argv) == 1 or "2" in sys.argv:
-        benchmarks.append(Single(8, 8, 8, 0, "./results", 3, _Epsilon, settings_128))
+        benchmarks.append(Single(8, 8, 8, 0, base_directory, 3, _Epsilon, settings_128))
+
+    settings_sparse = BenchmarkSettings(
+        runs=10,
+        repeats=3,
+        waste_of_time_threshold=0.1,
+        test_too_short_threshold=0.001,
+        long_run_multiplier=100,
+        benchmark_timeout=3.0,
+        benchmark_child_process=True,
+    )
+    for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
+        if len(sys.argv) == 1 or f"3-{rate}" in sys.argv:
+            benchmarks.append(
+                RandomSparseSingle(
+                    1024, 1024, 1024, 0, float(rate), float(rate), base_directory, 3, _Epsilon, settings_128
+                )
+            )
 
     benchmark_options = [a for a in sys.argv if a.startswith("-")]
     for benchmark in benchmarks:

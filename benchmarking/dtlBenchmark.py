@@ -2,21 +2,26 @@ import abc
 import os
 import pickle
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, TypeVar, Generic
+
+import numpy as np
 
 from benchmarking.benchmark import (
     Benchmark,
     BenchmarkSettings,
-    ID_Tuple,
     Options,
     PythonCode,
     Test,
     TestCode,
 )
-from dtl import TensorVariable
-from dtl.libBuilder import DTLCLib, LibBuilder, TupleStruct
-from xdsl.dialects.builtin import ModuleOp
+from dtl import TensorSpace, TensorVariable
+from dtl.libBuilder import DTLCLib, LibBuilder, NpArrayCtype, TupleStruct
+from xdsl.dialects import arith, builtin, func, llvm, printf, scf
+from xdsl.dialects.builtin import IndexType, IntegerAttr, IntegerType, ModuleOp
+from xdsl.dialects.experimental import dlt
+from xdsl.dialects.experimental.dlt import DimensionAttr
+from xdsl.ir import Block, Operation, SSAValue
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
     IterationGenerator,
     IterationMapping,
@@ -85,9 +90,9 @@ with open(##func_types_path##, "rb") as f:
 function_types_str = {k.data: v for k, v in function_types.items()}
 lib = DTLCLib(##lib_path##, dlt_func_types, function_types_str)
         """.replace(
-            "##func_types_path##", f"\"{test_path}/{self.get_func_types_name()}\""
+            "##func_types_path##", f'"{test_path}/{self.get_func_types_name()}"'
         ).replace(
-            "##lib_path##", f"\"{test_path}/{self.get_lib_name()}\""
+            "##lib_path##", f'"{test_path}/{self.get_lib_name()}"'
         )
         return code
 
@@ -119,12 +124,13 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         )
 
     @abc.abstractmethod
-    def define_lib_builder(self) -> LibBuilder:
+    def define_lib_builder(self) -> tuple[LibBuilder, tuple[TensorVariable, ...]]:
         raise NotImplementedError
 
     @abc.abstractmethod
     def get_configs_for_DTL_tensors(
         self,
+        *tensor_variables: TensorVariable,
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         raise NotImplementedError
 
@@ -192,15 +198,17 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
             case 3:
                 return ["-O3"]
             case 4:
-                return ["-O3", "-march=native"]
+                return ["-O3", "-ffast-math"]
+            case 5:
+                return ["-O3", "-ffast-math", "-march=native"]
 
     def initialise_benchmarks(self, options: Options) -> list[T_DTL]:
-        lib_builder = self.define_lib_builder()
+        lib_builder, tensor_variables = self.define_lib_builder()
         module, layout_graph, iteration_map = lib_builder.prepare(verbose=0)
         compile_context = DLTCompileContext(
             lib_builder, module, layout_graph, iteration_map, options
         )
-        layouts = self.get_layouts(layout_graph, lib_builder, options)
+        layouts = self.get_layouts(layout_graph, lib_builder, tensor_variables, options)
         layouts = [l for l in layouts if not self.skip_layout(l)]
         orders = self.get_orders(iteration_map, lib_builder, options)
         orders = [o for o in orders if not self.skip_order(o)]
@@ -208,7 +216,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         return tests
 
     def get_layouts(
-        self, layout_graph: LayoutGraph, lib_builder: LibBuilder, options: Options
+        self, layout_graph: LayoutGraph, lib_builder: LibBuilder, tensor_variables: tuple[TensorVariable, ...], options: Options
     ) -> list[PtrMapping]:
 
         match_func = lambda a, b: a.matches(b)
@@ -222,7 +230,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         if not found and key_int >= 0:
             gen_path = layouts
             dtl_config_map: dict[TupleStruct[TensorVariable], ReifyConfig] = (
-                self.get_configs_for_DTL_tensors()
+                self.get_configs_for_DTL_tensors(*tensor_variables)
             )
             config_map = {}
             for tensor_var, config in dtl_config_map.items():
@@ -294,7 +302,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         lib._close(delete=False)
 
     def load_lib(
-        self, test: T_DTL, test_path: str, options: Options
+        self, test: T_DTL, test_path: str, options: Options, load: bool = True
     ) -> DTLCLib | None:
         # test_path = test.get_test_path(tests_path)
         return self.get_compiled_lib(
@@ -305,6 +313,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
             test.get_lib_name(),
             test.get_func_types_name(),
             options,
+            load=load,
         )
 
     def get_compiled_lib(
@@ -316,6 +325,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         lib_name: str,
         func_types_name: str,
         options: Options,
+        load: bool = True,
     ) -> DTLCLib | None:
         self.start_inline_log(
             f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: "
@@ -362,7 +372,10 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         self.inline_log(0, "lib: ")
         if lib_exists:
             function_types_str = {k.data: v for k, v in function_types.items()}
-            lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
+            if load:
+                lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
+            else:
+                lib = None
             self.end_inline_log(0, "found.")
             return lib
         else:
@@ -385,6 +398,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                     dlt_func_map=dlt_func_types,
                     lib_path=lib_path,
                     clang_args=self.get_extra_clang_args(),
+                    load=load,
                     verbose=0,
                 )
                 self.end_inline_log(0, f"lib compiled to: {lib_path}")
@@ -416,16 +430,569 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                     llvm_only=options["only-to-llvm"],
                     lib_path=lib_path,
                     clang_args=self.get_extra_clang_args(),
+                    load=load,
                     verbose=0,
                 )
-                if lib is not None:
+                if options["only-to-llvm"]:
+                    self.end_inline_log(
+                        0, f"compiled to LLVM: {llvm_path} but no lib was produced."
+                    )
+                    return None
+                else:
                     self.end_inline_log(
                         0,
                         f"compiled to binary. LLVM: generated, lib: {lib._library_path}",
                     )
                     return lib
-                else:
-                    self.end_inline_log(
-                        0, f"compiled to LLVM: {llvm_path} but no lib was produced."
-                    )
-                    return None
+
+
+def make_setup_func_coo(
+    lib_builder: LibBuilder, name: str, t_var: TensorVariable, nnz: int
+):
+    tensor_space: TensorSpace = t_var.tensor_space
+    func_arg_types = [lib_builder.tensor_var_details[t_var]]  # DLT tensor
+    for d in tensor_space.shape:
+        func_arg_types.append(llvm.LLVMPointerType.opaque())  # each coord array for coo
+    func_arg_types.append(llvm.LLVMPointerType.opaque())  # the val array
+
+    setup_block = Block(arg_types=func_arg_types)
+    arg_tensor = setup_block.args[0]
+    args_np_ptr_coord = list(setup_block.args[1:-1])
+    arg_np_ptr_val = setup_block.args[-1]
+
+    arg_tensor_dims = lib_builder.tensor_var_dims[t_var]
+    assert len(arg_tensor_dims) == len(tensor_space.shape)
+
+    zero_op = arith.Constant(IntegerAttr(0, IndexType()))
+    one_op = arith.Constant(IntegerAttr(1, IndexType()))
+    setup_block.add_ops([zero_op, one_op])
+
+    nnz_ub_op = arith.Constant(IntegerAttr(nnz, IndexType()))
+    setup_block.add_ops([nnz_ub_op])
+
+    lb = zero_op.result
+    step = one_op.result
+    ub = nnz_ub_op.result
+
+    loop_block = Block(arg_types=[IndexType()])
+    nnz_index_cast_op = builtin.UnrealizedConversionCastOp.get(
+        [loop_block.args[0]], [builtin.i64]
+    )
+    loop_block.add_op(nnz_index_cast_op)
+    nnz_idx_i64 = nnz_index_cast_op.outputs[0]
+
+    coord_indices = []
+    for arg_np_ptr_coord in args_np_ptr_coord:
+        ptr_op = llvm.GEPOp(
+            arg_np_ptr_coord,
+            [0, llvm.GEP_USE_SSA_VAL],
+            [nnz_idx_i64],
+            pointee_type=llvm.LLVMArrayType.from_size_and_type(nnz, builtin.i32),
+        )
+        load_op = llvm.LoadOp(ptr_op.result, builtin.i32)
+        coord_i64_op = arith.ExtUIOp(load_op.dereferenced_value, builtin.i64)
+        coord_index_op = builtin.UnrealizedConversionCastOp.get(
+            [coord_i64_op.result], [IndexType()]
+        )
+        loop_block.add_ops([ptr_op, load_op, coord_i64_op, coord_index_op])
+        coord_indices.append(coord_index_op.outputs[0])
+
+    val_ptr_arith_op = llvm.GEPOp(
+        arg_np_ptr_val,
+        [0, llvm.GEP_USE_SSA_VAL],
+        [nnz_idx_i64],
+        pointee_type=llvm.LLVMArrayType.from_size_and_type(nnz, builtin.f32),
+    )
+    val_load_op = llvm.LoadOp(val_ptr_arith_op.result, builtin.f32)
+    loop_block.add_ops([val_ptr_arith_op, val_load_op])
+
+    select_op = dlt.SelectOp(arg_tensor, [], arg_tensor_dims, coord_indices)
+    set_op = dlt.SetOp(select_op.res, builtin.f32, val_load_op.dereferenced_value)
+    loop_block.add_ops([select_op, set_op])
+
+    # print_op = printf.PrintFormatOp("Set {} {} to {} ({}/{})", row_i64_op.result, col_i64_op.result, val_load_op.dereferenced_value, nnz_idx_i64, nnz_ub_i64)
+    # loop_block.add_op(print_op)
+
+    loop_block.add_op(scf.Yield())
+
+    loop_op = scf.For(lb, ub, step, [], loop_block)
+    setup_block.add_ops([loop_op, func.Return()])
+
+    np_ptr_type_val = NpArrayCtype((nnz,))
+    np_ptr_type_dim_list = []
+    for d in tensor_space.shape:
+        np_ptr_type_dim_list.append(NpArrayCtype((nnz,), np.int32))
+    lib_builder.make_custom_function(
+        name, setup_block, [t_var, *np_ptr_type_dim_list, np_ptr_type_val]
+    )
+
+
+def make_setup_func_dense(
+    lib_builder: LibBuilder, name: str, t_var: TensorVariable, dims: list[int]
+):
+    setup_block = Block(
+        arg_types=[
+            lib_builder.tensor_var_details[t_var],
+            llvm.LLVMPointerType.opaque(),
+        ]
+    )
+    arg_tensor, arg_np_ptr_val = setup_block.args
+    arg_tensor_dims = lib_builder.tensor_var_dims[t_var]
+    assert len(arg_tensor_dims) == len(dims), f"{len(arg_tensor_dims)} != {dims}"
+
+    def make_loop(
+        dims_to_loop: list[int],
+        tensor_dims: list[DimensionAttr],
+        indices: list[SSAValue],
+        dlt_ptr: SSAValue,
+    ) -> list[Operation]:
+        assert len(dims_to_loop) == len(tensor_dims)
+        if len(dims_to_loop) == 0:
+            ops = []
+            i64_indices = []
+            for index in indices:
+                index_cast_op = builtin.UnrealizedConversionCastOp.get(
+                    [index], [builtin.i64]
+                )
+                i64_indices.append(index_cast_op.outputs[0])
+                ops.append(index_cast_op)
+            llvm_ptr_type = builtin.f32
+            for dim in reversed(dims):
+                llvm_ptr_type = llvm.LLVMArrayType.from_size_and_type(
+                    dim, llvm_ptr_type
+                )
+            val_ptr_arith_op = llvm.GEPOp(
+                arg_np_ptr_val,
+                [0, *([llvm.GEP_USE_SSA_VAL] * len(i64_indices))],
+                i64_indices,
+                pointee_type=llvm_ptr_type,
+            )
+            val_load_op = llvm.LoadOp(val_ptr_arith_op.result, builtin.f32)
+            ops.extend([val_ptr_arith_op, val_load_op])
+            set_op = dlt.SetOp(dlt_ptr, builtin.f32, val_load_op.dereferenced_value)
+            ops.append(set_op)
+            return ops
+        else:
+            dim = dims_to_loop.pop(0)
+            dlt_dim = tensor_dims.pop(0)
+            ops = []
+            zero_op = arith.Constant(IntegerAttr(0, IndexType()))
+            one_op = arith.Constant(IntegerAttr(1, IndexType()))
+            ub_op = arith.Constant(IntegerAttr(dim, IndexType()))
+            ops.extend([zero_op, one_op, ub_op])
+            block = Block(arg_types=[IndexType()])
+            select_op = dlt.SelectOp(dlt_ptr, [], [dlt_dim], [block.args[0]])
+            block.add_op(select_op)
+            block.add_ops(
+                make_loop(
+                    dims_to_loop,
+                    tensor_dims,
+                    indices + [block.args[0]],
+                    select_op.res,
+                )
+            )
+            block.add_op(scf.Yield())
+            for_op = scf.For(zero_op.result, ub_op.result, one_op.result, [], block)
+            ops.append(for_op)
+            return ops
+
+    loop_ops = make_loop(list(dims), list(arg_tensor_dims), [], arg_tensor)
+    setup_block.add_ops(loop_ops)
+
+    setup_block.add_op(func.Return())
+
+    np_ptr_type = NpArrayCtype(tuple(dims))
+    lib_builder.make_custom_function(name, setup_block, [t_var, np_ptr_type])
+
+
+def make_check_func_coo(
+    lib_builder: LibBuilder,
+    name: str,
+    t_var: TensorVariable,
+    nnz: int,
+    epsilon: float,
+):
+    tensor_space: TensorSpace = t_var.tensor_space
+    func_arg_types = [lib_builder.tensor_var_details[t_var]]  # DLT tensor
+    for d in tensor_space.shape:
+        func_arg_types.append(llvm.LLVMPointerType.opaque())  # each coord array for coo
+    func_arg_types.append(llvm.LLVMPointerType.opaque())  # the val array
+    func_arg_types = [lib_builder.tensor_var_details[t_var]]  # the first DLT tensor
+
+    check_block = Block(arg_types=func_arg_types)
+    arg_tensor = check_block.args[0]
+    args_np_ptr_coord = list(check_block.args[1:-2])
+    arg_np_ptr_val = check_block.args[-2]
+    arg_tensor_first = check_block.args[-1]
+
+    arg_tensor_dims = lib_builder.tensor_var_dims[t_var]
+    assert len(arg_tensor_dims) == len(tensor_space.shape)
+
+    zero_op = arith.Constant(IntegerAttr(0, IndexType()))
+    one_op = arith.Constant(IntegerAttr(1, IndexType()))
+    false_op = arith.Constant(IntegerAttr(0, IndexType()))
+    true_op = arith.Constant(IntegerAttr(1, IndexType()))
+    f_zero_op = arith.Constant(builtin.FloatAttr(0.0, builtin.f32))
+    f_epsilon_op = arith.Constant(builtin.FloatAttr(epsilon, builtin.f32))
+    check_block.add_ops([zero_op, one_op, false_op, true_op, f_zero_op, f_epsilon_op])
+
+    nnz_ub_op = arith.Constant(IntegerAttr(nnz, IndexType()))
+    check_block.add_ops([nnz_ub_op])
+
+    lb = zero_op.result
+    step = one_op.result
+    ub = nnz_ub_op.result
+
+    loop_block = Block(
+        arg_types=[IndexType(), IntegerType(1), builtin.f32, IntegerType(1)]
+    )
+    nnz_index, correct_arg, total_error_arg, consistent_arg = loop_block.args
+    nnz_index_cast_op = builtin.UnrealizedConversionCastOp.get(
+        [nnz_index], [builtin.i64]
+    )
+    loop_block.add_op(nnz_index_cast_op)
+    nnz_idx_i64 = nnz_index_cast_op.outputs[0]
+
+    coord_indices = []
+    coord_i64_indices = []
+    for arg_np_ptr_coord in args_np_ptr_coord:
+        ptr_op = llvm.GEPOp(
+            arg_np_ptr_coord,
+            [0, llvm.GEP_USE_SSA_VAL],
+            [nnz_idx_i64],
+            pointee_type=llvm.LLVMArrayType.from_size_and_type(nnz, builtin.i32),
+        )
+        load_op = llvm.LoadOp(ptr_op.result, builtin.i32)
+        coord_i64_op = arith.ExtUIOp(load_op.dereferenced_value, builtin.i64)
+        coord_index_op = builtin.UnrealizedConversionCastOp.get(
+            [coord_i64_op.result], [IndexType()]
+        )
+        loop_block.add_ops([ptr_op, load_op, coord_i64_op, coord_index_op])
+        coord_i64_indices.append(coord_i64_op.result)
+        coord_indices.append(coord_index_op.outputs[0])
+
+    val_ptr_arith_op = llvm.GEPOp(
+        arg_np_ptr_val,
+        [0, llvm.GEP_USE_SSA_VAL],
+        [nnz_idx_i64],
+        pointee_type=llvm.LLVMArrayType.from_size_and_type(nnz, builtin.f32),
+    )
+    val_load_op = llvm.LoadOp(val_ptr_arith_op.result, builtin.f32)
+    ref_value = val_load_op.dereferenced_value
+    loop_block.add_ops([val_ptr_arith_op, val_load_op])
+
+    select_op = dlt.SelectOp(arg_tensor, [], arg_tensor_dims, coord_indices)
+    get_op = dlt.GetOp(select_op.res, builtin.f32)
+    value = get_op.res
+    loop_block.add_ops([select_op, get_op])
+
+    select_first_op = dlt.SelectOp(arg_tensor_first, [], arg_tensor_dims, coord_indices)
+    get_first_op = dlt.GetOp(select_first_op.res, builtin.f32)
+    value_first = get_first_op.res
+    loop_block.add_ops([select_first_op, get_first_op])
+
+    error_op = arith.Subf(value, ref_value)
+    neg_error_op = arith.Negf(error_op.result)
+    abs_error_op = arith.Maximumf(error_op.result, neg_error_op.result)
+    loop_block.add_ops([error_op, neg_error_op, abs_error_op])
+
+    norm_signed_epsilon_op = arith.Mulf(ref_value, f_epsilon_op.result)
+    norm_neg_signed_epsilon_op = arith.Negf(norm_signed_epsilon_op.result)
+    norm_epsilon_op = arith.Maximumf(
+        norm_signed_epsilon_op.result, norm_neg_signed_epsilon_op.result
+    )
+    loop_block.add_ops(
+        [
+            norm_signed_epsilon_op,
+            norm_neg_signed_epsilon_op,
+            norm_epsilon_op,
+        ]
+    )
+
+    new_total_error_op = arith.Addf(total_error_arg, abs_error_op.result)
+    new_total_error_arg = new_total_error_op.result
+    loop_block.add_op(new_total_error_op)
+
+    cmp_error_op = arith.Cmpf(abs_error_op.result, norm_epsilon_op.result, "ogt")
+    new_correct_op = arith.Select(cmp_error_op, false_op.result, correct_arg)
+    new_correct_arg = new_correct_op.result
+    loop_block.add_ops([cmp_error_op, new_correct_op])
+
+    if_error_op = scf.If(
+        cmp_error_op,
+        [],
+        [
+            printf.PrintFormatOp(
+                f"# Result miss match at {', '.join([d.dimensionName.data + ': {}' for d in arg_tensor_dims])} : reference = {{}}, result = {{}}, error = {{}} > {{}}",
+                *coord_i64_indices,
+                ref_value,
+                value,
+                abs_error_op.result,
+                norm_epsilon_op.result,
+            ),
+            scf.Yield(),
+        ],
+    )
+    loop_block.add_op(if_error_op)
+
+    cmp_first_op = arith.Cmpf(value, value_first, "one")
+    new_consistent_op = arith.Select(cmp_first_op, false_op.result, consistent_arg)
+    new_consistent_arg = new_consistent_op.result
+    loop_block.add_ops([cmp_first_op, new_consistent_op])
+
+    if_bit_wise_op = scf.If(
+        cmp_first_op,
+        [],
+        [
+            printf.PrintFormatOp(
+                f"# Result does not match previous result at {', '.join([d.dimensionName.data + ': {}' for d in arg_tensor_dims])}: first result = {{}}, this result = {{}}",
+                *coord_i64_indices,
+                value_first,
+                value,
+            ),
+            scf.Yield(),
+        ],
+    )
+    loop_block.add_op(if_bit_wise_op)
+    loop_block.add_op(
+        scf.Yield(new_correct_arg, new_total_error_arg, new_consistent_arg)
+    )
+
+    loop_op = scf.For(
+        lb, ub, step, [true_op.result, f_zero_op.result, true_op.result], loop_block
+    )
+    correct_res, total_error_res, consistent_res = tuple(loop_op.results)
+    check_block.add_op(loop_op)
+
+    output_correct_op = arith.ExtUIOp(correct_res, builtin.i64)
+    output_consistent_op = arith.ExtUIOp(consistent_res, builtin.i64)
+    check_block.add_ops([output_correct_op, output_consistent_op])
+    check_block.add_op(
+        func.Return(
+            output_correct_op.result,
+            total_error_res,
+            output_consistent_op.result,
+        )
+    )
+
+    np_ptr_type_val = NpArrayCtype((nnz,))
+    np_ptr_type_dim_list = []
+    for d in tensor_space.shape:
+        np_ptr_type_dim_list.append(NpArrayCtype((nnz,), np.int32))
+    lib_builder.make_custom_function(
+        name, check_block, [t_var, *np_ptr_type_dim_list, np_ptr_type_val, t_var]
+    )
+
+
+def make_check_func_dense(
+    lib_builder: LibBuilder,
+    name: str,
+    t_var: TensorVariable,
+    dims: list[int],
+    epsilon: float,
+):
+    check_block = Block(
+        arg_types=[
+            lib_builder.tensor_var_details[t_var],
+            llvm.LLVMPointerType.opaque(),
+            lib_builder.tensor_var_details[t_var],
+        ]
+    )
+    arg_tensor, arg_np_ptr_val, arg_tensor_first = check_block.args
+    arg_tensor_dims = lib_builder.tensor_var_dims[t_var]
+    assert len(arg_tensor_dims) == len(dims)
+
+    def make_loop(
+        dims_to_loop: list[int],
+        tensor_dims: list[DimensionAttr],
+        indices: list[SSAValue],
+        dlt_ptr: SSAValue,
+        dlt_ptr_first: SSAValue,
+        correct_arg: SSAValue,
+        total_error_arg: SSAValue,
+        consistent_arg: SSAValue,
+    ) -> tuple[list[Operation], tuple[SSAValue, SSAValue, SSAValue]]:
+        assert len(dims_to_loop) == len(tensor_dims)
+        if len(dims_to_loop) == 0:
+            ops = []
+            false_op = arith.Constant(IntegerAttr(0, IntegerType(1)))
+            f_epsilon_op = arith.Constant(builtin.FloatAttr(epsilon, builtin.f32))
+            ops.extend([false_op, f_epsilon_op])
+            i64_indices = []
+            for index in indices:
+                index_cast_op = builtin.UnrealizedConversionCastOp.get(
+                    [index], [builtin.i64]
+                )
+                i64_indices.append(index_cast_op.outputs[0])
+                ops.append(index_cast_op)
+            llvm_ptr_type = builtin.f32
+            for dim in reversed(dims):
+                llvm_ptr_type = llvm.LLVMArrayType.from_size_and_type(
+                    dim, llvm_ptr_type
+                )
+            val_ptr_arith_op = llvm.GEPOp(
+                arg_np_ptr_val,
+                [0, *([llvm.GEP_USE_SSA_VAL] * len(i64_indices))],
+                i64_indices,
+                pointee_type=llvm_ptr_type,
+            )
+            val_load_op = llvm.LoadOp(val_ptr_arith_op.result, builtin.f32)
+            ops.extend([val_ptr_arith_op, val_load_op])
+            get_op = dlt.GetOp(dlt_ptr, builtin.f32)
+            ops.append(get_op)
+            get_first_op = dlt.GetOp(dlt_ptr_first, builtin.f32)
+            ops.append(get_first_op)
+
+            ref_value = val_load_op.dereferenced_value
+            value = get_op.res
+            value_first = get_first_op.res
+
+            error_op = arith.Subf(value, ref_value)
+            neg_error_op = arith.Negf(error_op.result)
+            abs_error_op = arith.Maximumf(error_op.result, neg_error_op.result)
+            ops.extend([error_op, neg_error_op, abs_error_op])
+
+            norm_signed_epsilon_op = arith.Mulf(ref_value, f_epsilon_op.result)
+            norm_neg_signed_epsilon_op = arith.Negf(norm_signed_epsilon_op.result)
+            norm_epsilon_op = arith.Maximumf(
+                norm_signed_epsilon_op.result, norm_neg_signed_epsilon_op.result
+            )
+            ops.extend(
+                [
+                    norm_signed_epsilon_op,
+                    norm_neg_signed_epsilon_op,
+                    norm_epsilon_op,
+                ]
+            )
+
+            new_total_error_op = arith.Addf(total_error_arg, abs_error_op.result)
+            new_total_error_arg = new_total_error_op.result
+            ops.append(new_total_error_op)
+
+            cmp_error_op = arith.Cmpf(
+                abs_error_op.result, norm_epsilon_op.result, "ogt"
+            )
+            new_correct_op = arith.Select(cmp_error_op, false_op.result, correct_arg)
+            new_correct_arg = new_correct_op.result
+            ops.extend([cmp_error_op, new_correct_op])
+
+            if_error_op = scf.If(
+                cmp_error_op,
+                [],
+                [
+                    printf.PrintFormatOp(
+                        f"# Result miss match at {', '.join([d.dimensionName.data +': {}' for d in arg_tensor_dims])} : reference = {{}}, result = {{}}, error = {{}} > {{}}",
+                        *i64_indices,
+                        ref_value,
+                        value,
+                        abs_error_op.result,
+                        norm_epsilon_op.result,
+                    ),
+                    scf.Yield(),
+                ],
+            )
+            ops.append(if_error_op)
+
+            cmp_first_op = arith.Cmpf(value, value_first, "one")
+            new_consistent_op = arith.Select(
+                cmp_first_op, false_op.result, consistent_arg
+            )
+            new_consistent_arg = new_consistent_op.result
+            ops.extend([cmp_first_op, new_consistent_op])
+
+            if_bit_wise_op = scf.If(
+                cmp_first_op,
+                [],
+                [
+                    printf.PrintFormatOp(
+                        f"# Result does not match previous result at {', '.join([d.dimensionName.data +': {}' for d in arg_tensor_dims])}: first result = {{}}, this result = {{}}",
+                        *i64_indices,
+                        value_first,
+                        value,
+                    ),
+                    scf.Yield(),
+                ],
+            )
+            ops.append(if_bit_wise_op)
+
+            return ops, (new_correct_arg, new_total_error_arg, new_consistent_arg)
+        else:
+            dim = dims_to_loop.pop(0)
+            dlt_dim = tensor_dims.pop(0)
+            ops = []
+            zero_op = arith.Constant(IntegerAttr(0, IndexType()))
+            one_op = arith.Constant(IntegerAttr(1, IndexType()))
+            ub_op = arith.Constant(IntegerAttr(dim, IndexType()))
+            ops.extend([zero_op, one_op, ub_op])
+            block = Block(
+                arg_types=[IndexType(), IntegerType(1), builtin.f32, IntegerType(1)]
+            )
+            (
+                index,
+                inner_correct_arg,
+                inner_total_error_arg,
+                inner_consistent_arg,
+            ) = block.args
+            select_op = dlt.SelectOp(dlt_ptr, [], [dlt_dim], [index])
+            select_first_op = dlt.SelectOp(dlt_ptr_first, [], [dlt_dim], [index])
+            block.add_ops([select_op, select_first_op])
+            inner_ops, (
+                new_inner_correct_arg,
+                new_inner_total_error_arg,
+                new_inner_consistent_arg,
+            ) = make_loop(
+                dims_to_loop,
+                tensor_dims,
+                indices + [index],
+                select_op.res,
+                select_first_op.res,
+                inner_correct_arg,
+                inner_total_error_arg,
+                inner_consistent_arg,
+            )
+            block.add_ops(inner_ops)
+            block.add_op(
+                scf.Yield(
+                    new_inner_correct_arg,
+                    new_inner_total_error_arg,
+                    new_inner_consistent_arg,
+                )
+            )
+            for_op = scf.For(
+                zero_op.result,
+                ub_op.result,
+                one_op.result,
+                [correct_arg, total_error_arg, consistent_arg],
+                block,
+            )
+            correct_arg_res, total_error_arg_res, consistent_arg_res = for_op.results
+            ops.append(for_op)
+            return ops, (correct_arg_res, total_error_arg_res, consistent_arg_res)
+
+    true_op = arith.Constant(IntegerAttr(1, IntegerType(1)))
+    f_zero_op = arith.Constant(builtin.FloatAttr(0.0, builtin.f32))
+    check_block.add_ops([true_op, f_zero_op])
+    loop_ops, (correct_res, total_error_res, consistent_res) = make_loop(
+        list(dims),
+        list(arg_tensor_dims),
+        [],
+        arg_tensor,
+        arg_tensor_first,
+        true_op.result,
+        f_zero_op.result,
+        true_op.result,
+    )
+    check_block.add_ops(loop_ops)
+    output_correct_op = arith.ExtUIOp(correct_res, builtin.i64)
+    output_consistent_op = arith.ExtUIOp(consistent_res, builtin.i64)
+    check_block.add_ops([output_correct_op, output_consistent_op])
+    check_block.add_op(
+        func.Return(
+            output_correct_op.result,
+            total_error_res,
+            output_consistent_op.result,
+        )
+    )
+
+    np_ptr_type = NpArrayCtype(tuple(dims))
+    lib_builder.make_custom_function(name, check_block, [t_var, np_ptr_type, t_var])

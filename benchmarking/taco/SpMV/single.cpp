@@ -4,7 +4,8 @@
 
 #define I ##I##
 #define J ##J##
-#define K ##K##
+
+#define NNZ ##NNZ##
 
 #define E ##Epsilon##
 
@@ -27,7 +28,7 @@ extern "C" void dealloc_A(Tensor<float>** r_a_ptr) {
 extern "C" void init_B(Tensor<float>** r_b, Tensor<float>** b) {
 //    std::cout << "init_B" << std::endl;
     Format f_b(##B_Format##);
-    Tensor<float>* n = new Tensor<float>("B", {J,K}, f_b);
+    Tensor<float>* n = new Tensor<float>("B", {J}, f_b);
     *r_b = n;
     *b = n;
 }
@@ -41,7 +42,7 @@ extern "C" void dealloc_B(Tensor<float>** r_b_ptr) {
 extern "C" void init_C(Tensor<float>** r_c, Tensor<float>** c) {
 //    std::cout << "init_C" << std::endl;
     Format  f_c(##C_Format##);
-    Tensor<float>* n = new Tensor<float>("C", {I,K}, f_c);
+    Tensor<float>* n = new Tensor<float>("C", {I}, f_c);
     *r_c = n;
     *c = n;
 }
@@ -52,13 +53,15 @@ extern "C" void dealloc_C(Tensor<float>** r_c_ptr) {
     delete r_c;
 }
 
-extern "C" void setup_A(Tensor<float>** a_ptr, float* vals){
-//    std::cout << "setup_A" << std::endl;
+extern "C" void setup_A(Tensor<float>** a_ptr, int32_t* coord_0, int32_t* coord_1, float* vals){
+//    std::cout << "# setup_A" << std::endl;
     Tensor<float>* a = *a_ptr;
-    for(int i = 0; i < I; i++){
-        for(int j = 0; j < J; j++){
-            (*a)(i, j) = vals[J*i + j];
-        }
+    for(uint64_t idx = 0; idx < NNZ; idx++){
+
+        int32_t c_0 = coord_0[idx];
+        int32_t c_1 = coord_1[idx];
+        float val = vals[idx];
+        (*a)(c_0, c_1) = val;
     }
     a->pack();
 }
@@ -67,9 +70,7 @@ extern "C" void setup_B(Tensor<float>** b_ptr, float* vals){
 //    std::cout << "setup_B" << std::endl;
     Tensor<float>* b = * b_ptr;
     for(int j = 0; j < J; j++){
-        for(int k = 0; k < K; k++){
-            (*b)(j, k) = vals[K*j + k];
-        }
+            (*b)(j) = vals[j];
     }
     b->pack();
 }
@@ -80,14 +81,15 @@ extern "C" void prepare(Tensor<float>** a_ptr, Tensor<float>** b_ptr, Tensor<flo
     Tensor<float> b = ** b_ptr;
     Tensor<float> c = ** c_ptr;
     IndexVar i, j, k;
-    c(i,k) = a(i,j) * b(j,k);
+    c(i) = a(i,j) * b(j);
     c.compile();
-    c.assemble();
+//    c.assemble();
 }
 
-extern "C" void matmul(Tensor<float>** c_ptr, Tensor<float>** a_ptr, Tensor<float>** b_ptr) {
+extern "C" void spmv(Tensor<float>** c_ptr, Tensor<float>** a_ptr, Tensor<float>** b_ptr) {
 //    std::cout << "matmul" << std::endl;
     Tensor<float> c = ** c_ptr;
+    c.assemble();
     c.compute();
 }
 
@@ -105,10 +107,9 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
         float c_v = value->second;
 //        std::cout << "coord: " << coord << " val: " << c_v << std::endl;
         int i = coord[0];
-        int k = coord[1];
-//        std::cout << "i: " << i << " k: " << k << std::endl;
+//        std::cout << "i: " << i << std::endl;
 
-        float ref = vals[K*i + k];
+        float ref = vals[i];
         float error = (c_v - ref);
         error = error > -error ? error : -error;
         float base_epsilon = E;
@@ -129,29 +130,6 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
         total_consistent &= consistent;
         ++value_f;
     }
-
-//    for(int i = 0; i < I; i++){
-//        for(int k = 0; k < K; k++){
-//            float c_v = c.at({i, k});
-////            float c_v = 0;
-//            float ref = vals[K*i + k];
-//            float error = (c_v - ref);
-//            error = error > -error ? error : -error;
-//            float base_epsilon = E;
-//            float epsilon = base_epsilon * (ref > -ref? ref : -ref);
-//            bool correct = epsilon >= error;
-//            float c_f_v = c_f.at({i, k});
-////            float c_f_v = 0;
-//            bool consistent = c_f_v == c_v;
-//
-//            total_correct &= correct;
-//            total_error += error;
-//            total_consistent &= consistent;
-//
-////            std::cout << "i:" << i << " k:"<< k << " c[i,k]:" << c_v << " ref:" << ref << " error:" << error << " epsilon:" << epsilon << " correct:" << correct << " c_first:" << c_f_v << " consistent:" << consistent << " Total Error:" << total_error << std::endl;
-//        }
-////              std::cout << "i:" << i << " k:"<< "0-K" << " consistent:" << total_consistent << " Total Error:" << total_error << std::endl;
-//    }
     *correct_ret = (uint64_t) total_correct;
     *total_error_ret = total_error;
     *consistent_ret = (uint64_t) total_consistent;

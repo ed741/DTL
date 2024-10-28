@@ -71,7 +71,8 @@ class BenchmarkSettings:
     test_too_short_threshold: float = 0.001,
     long_run_multiplier: int = 100,
     benchmark_timeout: float = 3,
-    benchmark_child_process: bool = True,
+    benchmark_trial_child_process: bool = True,
+    benchmark_in_child_process: bool = False,
 
 class Benchmark(abc.ABC, Generic[T, L]):
 
@@ -103,7 +104,7 @@ class Benchmark(abc.ABC, Generic[T, L]):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def load_lib(self, test: T, test_path: str, options: Options) -> L:
+    def load_lib(self, test: T, test_path: str, options: Options, load: bool = True) -> L:
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -316,7 +317,6 @@ class Benchmark(abc.ABC, Generic[T, L]):
             if runs_to_do < 1:
                 self.log(f"Skipping test id: ({test.get_id_str()}), as test has {runs_to_do} runs.")
             else:
-                lib = self.get_lib(test, options)
                 for rep in range(self.settings.repeats):
                     if (test.get_id(), rep) in loaded_results:
                         self.log(f"Skipping test id: {test.get_id_str()}, rep: {rep} as it is already in the results file")
@@ -325,12 +325,9 @@ class Benchmark(abc.ABC, Generic[T, L]):
                     if options["skip_testing"]:
                         self.end_inline_log(char_count, f"Skipping testing")
                         continue
-                    if lib is None:
-                        self.end_inline_log(char_count, f"Cannot test because lib is None")
-                        continue
 
                     universal_results, results = (
-                        self.run_test(test, lib, runs_to_do)
+                        self.run_test(test, runs_to_do, rep, options)
                     )
                     self.write_result(test, rep, universal_results, results)
                     runs_done, test_time, wait_time, finished = universal_results
@@ -348,21 +345,29 @@ class Benchmark(abc.ABC, Generic[T, L]):
             if lib is None:
                 self.log(f"Cannot trail test because lib is None")
                 return 0
-            if self.settings.benchmark_child_process:
+            if self.settings.benchmark_trial_child_process:
                 count = self.start_inline_log(f"Trail test starting in new process: ")
-                u_res, res = self.run_external_test(test, 1)
+                u_res, res = self.run_external_test(test, 1, -1)
                 self.write_result(test, -1, u_res, res)
                 test_runs, test_time, test_w_time, test_fin = u_res
             else:
                 count = self.start_inline_log(f"Trail test: ", "...")
-                u_res, res = self.run_test(test, lib, 1)
+                u_res, res = self.run_internal_test(test, lib, 1)
                 self.write_result(test, -1, u_res, res)
                 test_runs, test_time, test_w_time, test_fin = u_res
         self.end_inline_log(count, f"runs: {test_runs}, time: {test_time}, wait time: {test_w_time}, finished: {test_fin}")
         trial_time = test_time / test_runs
         return self.get_runs_for_time(trial_time)
 
-    def run_test(self, test: T, lib: L, runs: int) -> tuple[U_Res_Tuple, Res_Tuple]:
+    def run_test(self, test: T, runs: int, rep: int, options: Options) -> tuple[U_Res_Tuple, Res_Tuple]:
+        if self.settings.benchmark_in_child_process:
+            lib = self.get_lib(test, options, load=False)
+            return self.run_external_test(test, runs, rep)
+        else:
+            lib = self.get_lib(test, options, load=True)
+            return self.run_internal_test(test, lib, runs)
+
+    def run_internal_test(self, test: T, lib: L, runs: int) -> tuple[U_Res_Tuple, Res_Tuple]:
         start_time = time.time()
         test_time, res = benchmarkRunner.run_benchmark(lib,
                                                        runs,
@@ -373,11 +378,23 @@ class Benchmark(abc.ABC, Generic[T, L]):
                                                        test.code.test,
                                                        test.code.clean,
                                                        test.get_result_headings(),
-                                                       print_updates=True)
+                                                       print_updates=True,
+                                                       inline_updates=True,
+                                                       )
         waiting_time = time.time() - start_time
         return (runs, test_time, waiting_time, True), res
 
-    def run_external_test(self,  test: T, runs: int) -> tuple[U_Res_Tuple, Res_Tuple]:
+    def dump_test_output(self, dump_dir: str, output: str, err: str, info: str):
+        path = f"{dump_dir}/{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
+        os.makedirs(path, exist_ok=False)
+        with open(f"{path}/stdout", "w") as f:
+            f.write(output)
+        with open(f"{path}/stderr", "w") as f:
+            f.write(err)
+        with open(f"{path}/info", "w") as f:
+            f.write(info)
+
+    def run_external_test(self,  test: T, runs: int, rep: int) -> tuple[U_Res_Tuple, Res_Tuple]:
         count = self.inline_log(0, "setting up")
         args = []
         args.extend(["python", "benchmarking/benchmarkRunner.py"])
@@ -396,19 +413,20 @@ class Benchmark(abc.ABC, Generic[T, L]):
         args.extend(["--benchmark", test.code.benchmark])
         args.extend(["--test", test.code.test])
         args.extend(["--clean", test.code.clean])
+        args.extend(["-pt"])
 
         current_env = os.environ.copy()
         count = self.inline_log(count, "starting")
         start_time = time.time()
         process_benchmark = subprocess.Popen(
             args, env=current_env, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.PIPE, text=True,
         )
-        count = self.inline_log(count, "waiting for benchmark")
+        count = self.inline_log(count, "waiting for benchmark process")
 
         finished = False
         try:
-            out_bytes, err = process_benchmark.communicate(timeout=self.settings.benchmark_timeout*runs)
+            out, err = process_benchmark.communicate(timeout=self.settings.benchmark_timeout*runs)
             finished = True
             waiting_time = time.time() - start_time
             self.inline_log(count,"finished, ")
@@ -416,18 +434,24 @@ class Benchmark(abc.ABC, Generic[T, L]):
             waiting_time = time.time() - start_time
             count = self.inline_log(count, "timed out")
             process_benchmark.kill()
-            out_bytes, err = process_benchmark.communicate()
+            out, err = process_benchmark.communicate()
             self.inline_log(count, "killed, ")
 
-        out = out_bytes.decode("utf8")
         split_out = out.split("\n")
+        split_out = [s for s in split_out if not s.startswith("#")]
+
+        dump_path = f"{test.get_test_path(self.get_dump_path())}/{test.get_id_str()}/{rep}"
+        info = (f"Process return code: {process_benchmark.returncode}\n")
+        self.dump_test_output(dump_path, out, err, info)
+
+
         if len(split_out) != 1 + len(test.get_result_headings()) + 1:
             if finished:
                 self.end_inline_log(count, " ERROR", append=True)
                 self.log(f"{len(split_out)} != 1 + {len(test.get_result_headings())} + 1")
                 self.log(f"Process return code: {process_benchmark.returncode}", error=True)
                 self.log(f" Test finished but output is: {split_out} ", error=True)
-                self.log(f" ERROR: outputs from process:\n out: {out_bytes} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}", error=True)
+                self.log(f" outputs from process:\n out: {out}\n err: {err}", error=True)
                 return (runs, -1.0, waiting_time, True), self._non_result_for(test.get_result_headings())
             else:
                 return (runs, -1.0, waiting_time, False), self._non_result_for(test.get_result_headings())
@@ -440,7 +464,7 @@ class Benchmark(abc.ABC, Generic[T, L]):
             self.log(f"Process exit code: {process_benchmark.returncode}", error=True)
             self.log(f" Test finished but output is: {split_out} ", error=True)
             self.log(
-                f" ERROR: outputs from process:\n out: {out_bytes} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}",
+                f" outputs from process:\n out: {out} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}",
                 error=True)
             self.log(str(e), error=True)
             return (runs, -2.0, waiting_time, finished), self._non_result_for(test.get_result_headings())
@@ -451,12 +475,15 @@ class Benchmark(abc.ABC, Generic[T, L]):
     def get_tests_path(self) -> str:
         return f"{self.base_dir}/tests"
 
-    def get_lib(self, test: T, options: Options) -> L | None:
+    def get_dump_path(self) -> str:
+        return f"{self.base_dir}/dump"
+
+    def get_lib(self, test: T, options: Options, load: bool = True) -> L | None:
         if self.lib_id != test.get_id():
             self.close_lib()
             tests_path = self.get_tests_path()
             test_path = test.get_test_path(tests_path)
-            lib = self.load_lib(test, test_path, options)
+            lib = self.load_lib(test, test_path, options, load=load)
             self.lib = lib
             self.lib_id = test.get_id()
         return self.lib
@@ -516,7 +543,8 @@ class Benchmark(abc.ABC, Generic[T, L]):
 
         self.end_inline_log(count, f"{len(checked_keys)} keys checked, No match found.")
         if lock:
-            new_key = max(*checked_keys) + 1
+            checked_keys.add(-1)
+            new_key = max(checked_keys) + 1
             new_key_str = f"{new_key}?"
             count = self.start_inline_log(" Attempting to lock key: ", f"{new_key_str}")
             file_found = False

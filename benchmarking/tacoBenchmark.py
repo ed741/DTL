@@ -76,6 +76,24 @@ lib = DTLCLib(##lib_path##, dlt_func_types, function_types_str)
         )
         return code
 
+class BasicTacoTest(TacoTest):
+
+    @classmethod
+    def get_id_headings(cls) -> list[tuple[str, type[str] | type[int] | type[bool]]]:
+        return [
+            ("taco_layout", int),
+        ]
+
+    @classmethod
+    def get_result_headings(
+        cls,
+    ) -> list[tuple[str, type[int] | type[bool] | type[float]]]:
+        return [("correct", bool), ("total_error", float), ("consistent", bool)]
+
+    def get_id(self) -> ID_Tuple:
+        return (self.type_mapping[0],)
+
+
 
 T_Taco = TypeVar("T_Taco", bound=TacoTest)
 
@@ -170,7 +188,7 @@ class TacoBenchmark(Benchmark[T_Taco, DTLCLib], abc.ABC, Generic[T_Taco]):
         lib._close(delete=False)
 
     def load_lib(
-        self, test: T_Taco, test_path: str, options: Options
+        self, test: T_Taco, test_path: str, options: Options, load: bool = True
     ) -> DTLCLib | None:
         # test_path = test.get_test_path(tests_path)
         return self.get_compiled_lib(
@@ -181,6 +199,7 @@ class TacoBenchmark(Benchmark[T_Taco, DTLCLib], abc.ABC, Generic[T_Taco]):
             self.get_code_injection(),
             test.cpp_path,
             options,
+            load = load,
         )
 
     def get_compiled_lib(
@@ -192,6 +211,7 @@ class TacoBenchmark(Benchmark[T_Taco, DTLCLib], abc.ABC, Generic[T_Taco]):
         code_injection: list[tuple[str, str]],
         cpp_path: str,
         options: Options,
+        load: bool = True,
     ) -> DTLCLib | None:
         type_map_number, type_map = type_mapping
         count = self.start_inline_log(f"Getting lib for mapping: {type_map_number} :: ")
@@ -217,8 +237,11 @@ class TacoBenchmark(Benchmark[T_Taco, DTLCLib], abc.ABC, Generic[T_Taco]):
         lib_exists = os.path.exists(lib_path)
         self.inline_log(0, "lib: ")
         if lib_exists:
-            function_types_str = {k.data: v for k, v in function_types.items()}
-            lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
+            if load:
+                function_types_str = {k.data: v for k, v in function_types.items()}
+                lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
+            else:
+                lib = None
             self.end_inline_log(count, "found.", append=True)
             return lib
         else:
@@ -265,9 +288,12 @@ class TacoBenchmark(Benchmark[T_Taco, DTLCLib], abc.ABC, Generic[T_Taco]):
             print(err.decode("utf8") if err is not None else None)
         process_clang.wait()
 
-        count = self.inline_log(count, f"compiled, ", append=True)
+        count = self.inline_log(count, f"compiled", append=True)
 
-        function_types_str = {k.data: v for k, v in function_types.items()}
-        lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
-        self.end_inline_log(count, f"and loaded", append=True)
+        if load:
+            function_types_str = {k.data: v for k, v in function_types.items()}
+            lib = DTLCLib(lib_path, dlt_func_types, function_types_str)
+            self.end_inline_log(count, f" and loaded", append=True)
+        else:
+            lib = None
         return lib

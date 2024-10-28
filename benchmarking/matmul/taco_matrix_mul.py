@@ -1,7 +1,6 @@
 import abc
 import os
 import sys
-from random import Random
 from typing import Any, Generic
 
 import numpy as np
@@ -13,7 +12,7 @@ from benchmarking.matmul.matrix_mul_code import (
 )
 from benchmarking.benchmark import BenchmarkSettings, ID_Tuple, TestCode
 from dtl.libBuilder import FuncTypeDescriptor, NpArrayCtype, StructType
-from benchmarking.tacoBenchmark import T_Taco, TacoBenchmark, TacoTest, TypeMap
+from benchmarking.tacoBenchmark import BasicTacoTest, T_Taco, TacoBenchmark, TacoTest, TypeMap
 from xdsl.dialects import llvm
 from xdsl.dialects.builtin import FunctionType, StringAttr, f32, i64
 from xdsl.dialects.experimental import dlt
@@ -22,24 +21,6 @@ from xdsl.dialects.experimental import dlt
 _Epsilon = 0.00001
 
 _Args = tuple[Any, StructType, StructType, StructType]
-
-
-class MatMulDenseTacoTest(TacoTest):
-
-    @classmethod
-    def get_id_headings(cls) -> list[tuple[str, type[str] | type[int] | type[bool]]]:
-        return [
-            ("taco_layout", int),
-        ]
-
-    @classmethod
-    def get_result_headings(
-        cls,
-    ) -> list[tuple[str, type[int] | type[bool] | type[float]]]:
-        return [("correct", bool), ("total_error", float), ("consistent", bool)]
-
-    def get_id(self) -> ID_Tuple:
-        return (self.type_mapping[0],)
 
 
 class MatMulDenseTaco(TacoBenchmark[T_Taco], abc.ABC, Generic[T_Taco]):
@@ -69,8 +50,8 @@ class MatMulDenseTaco(TacoBenchmark[T_Taco], abc.ABC, Generic[T_Taco]):
         self.seed = seed
         self.epsilon = epsilon
 
-        r = Random(seed)
-        np_a, np_b, np_c = self.make_abc(r)
+
+        np_a, np_b, np_c = self.make_abc(seed)
 
         self.np_a = np_a
         self.np_b = np_b
@@ -94,8 +75,8 @@ class MatMulDenseTaco(TacoBenchmark[T_Taco], abc.ABC, Generic[T_Taco]):
     def test_data_variant_name(self) -> str:
         return f"{str(self.seed)}"
 
-    def make_abc(self, r: Random) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return make_dense_np_arrays(r, self.i, self.j, self.k)
+    def make_abc(self, seed:int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return make_dense_np_arrays(seed, self.i, self.j, self.k)
 
     def get_format_options(self) -> dict[str, tuple[list[str], ...]]:
         f = ["Dense", "Sparse"]
@@ -105,7 +86,7 @@ class MatMulDenseTaco(TacoBenchmark[T_Taco], abc.ABC, Generic[T_Taco]):
             "##C_Format##": (f, f),
         }
 
-    def get_code_injection(self):
+    def get_code_injection(self) -> list[tuple[str, str]]:
         return [
             ("##I##", str(self.i)),
             ("##J##", str(self.j)),
@@ -114,13 +95,13 @@ class MatMulDenseTaco(TacoBenchmark[T_Taco], abc.ABC, Generic[T_Taco]):
         ]
 
 
-class Single(MatMulDenseTaco[MatMulDenseTacoTest]):
+class Single(MatMulDenseTaco[BasicTacoTest]):
     def get_self_name(self) -> str:
         return "single"
 
     def make_tests_for(self, type_map: TypeMap) -> list[T_Taco]:
         return [
-            MatMulDenseTacoTest(
+            BasicTacoTest(
                 matmul_single_code,
                 self.taco_path,
                 f"./benchmarking/taco/matmul/single.cpp",
@@ -211,7 +192,7 @@ class Single(MatMulDenseTaco[MatMulDenseTacoTest]):
         return function_types, function_type_descriptor
 
 
-class MatMulSparseTacoTest(TacoTest):
+class MatMulSparseTacoTest(BasicTacoTest):
 
     def __init__(
         self,
@@ -231,7 +212,7 @@ class MatMulSparseTacoTest(TacoTest):
         return super().get_id_headings() + [("rate_a", str), ("rate_b", str)]
 
     def get_id(self) -> ID_Tuple:
-        return tuple([*super().get_id(), str(self.rate_a), str(self.rate_b)])
+        return *super().get_id(), str(self.rate_a), str(self.rate_b)
 
 
 class RandomSparseSingle(MatMulDenseTaco[MatMulSparseTacoTest]):
@@ -249,9 +230,10 @@ class RandomSparseSingle(MatMulDenseTaco[MatMulSparseTacoTest]):
         epsilon: float,
         settings: BenchmarkSettings,
     ):
-        super().__init__(i, j, k, seed, base_dir, opt_num, epsilon, settings)
         self.rate_a = rate_a
         self.rate_b = rate_b
+        super().__init__(i, j, k, seed, base_dir, opt_num, epsilon, settings)
+
 
     def get_self_name(self) -> str:
         return "random_sparse"
@@ -269,11 +251,11 @@ class RandomSparseSingle(MatMulDenseTaco[MatMulSparseTacoTest]):
         ]
 
     def test_data_variant_name(self) -> str:
-        return super().test_data_variant_name() + f"{self.rate_a}_{self.rate_b}"
+        return super().test_data_variant_name() + f"_{self.rate_a}_{self.rate_b}"
 
-    def make_abc(self, r: Random) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def make_abc(self, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         return make_random_sparse_np_arrays(
-            r, self.i, self.j, self.k, self.rate_a, self.rate_b
+            seed, self.i, self.j, self.k, self.rate_a, self.rate_b
         )
 
     def make_func_types(
@@ -374,7 +356,7 @@ if __name__ == "__main__":
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
         benchmark_timeout=3.0,
-        benchmark_child_process=True,
+        benchmark_trial_child_process=True,
     )
     settings_8 = BenchmarkSettings(
         runs=10,
@@ -383,7 +365,7 @@ if __name__ == "__main__":
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
         benchmark_timeout=3.0,
-        benchmark_child_process=False,
+        benchmark_trial_child_process=False,
     )
     base_directory = "./results"
     if len(sys.argv) == 1 or "1" in sys.argv:
@@ -400,7 +382,7 @@ if __name__ == "__main__":
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
         benchmark_timeout=3.0,
-        benchmark_child_process=True,
+        benchmark_trial_child_process=True,
     )
     for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
         if len(sys.argv) == 1 or f"3-{rate}" in sys.argv:

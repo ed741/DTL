@@ -27,6 +27,7 @@ matmul_triple_code = TestCode(
 root, (a,b,c) = lib.init()
 lib.setup_A(a, np_a)
 lib.setup_B(b, np_b)
+lib.prepare(a,b,c)
 """,
     benchmark=matmul_base_code.benchmark,
     test=matmul_base_code.test,
@@ -41,6 +42,7 @@ r_ab, (a, b) = lib.init_AB()
 r_c, (c) = lib.init_C()
 lib.setup_A(a, np_a)
 lib.setup_B(b, np_b)
+lib.prepare(a,b,c)
 """,
     benchmark=matmul_base_code.benchmark,
     test=matmul_base_code.test,
@@ -68,7 +70,8 @@ lib.dealloc_C(r_c)
 """,
 )
 
-def make_dense_np_arrays(r: Random, i: int, j: int, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def make_dense_np_arrays(seed: int, i: int, j: int, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    r = Random(seed)
     np_a = np.zeros((i, j), dtype=np.float32)
     np_b = np.zeros((j, k), dtype=np.float32)
     for i_i in range(i):
@@ -82,7 +85,8 @@ def make_dense_np_arrays(r: Random, i: int, j: int, k: int) -> tuple[np.ndarray,
     np_c = np.matmul(np_a, np_b, dtype=np.float32, casting="no")
     return np_a, np_b, np_c
 
-def make_random_sparse_np_arrays(r: Random, i: int, j: int, k: int, rate_a: float, rate_b: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def make_random_sparse_np_arrays(seed: int, i: int, j: int, k: int, rate_a: float, rate_b: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    r = Random(seed)
     np_a = np.zeros((i, j), dtype=np.float32)
     np_b = np.zeros((j, k), dtype=np.float32)
     for i_i in range(i):

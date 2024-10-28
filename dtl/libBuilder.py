@@ -863,6 +863,11 @@ class LibBuilder:
             llvm.LLVMFunctionType([builtin.i64], llvm.LLVMPointerType.opaque()),
             linkage=llvm.LinkageAttr("external"),
         )
+        realloc_func = llvm.FuncOp(
+            "realloc",
+            llvm.LLVMFunctionType([llvm.LLVMPointerType.opaque(), builtin.i64], llvm.LLVMPointerType.opaque()),
+            linkage=llvm.LinkageAttr("external"),
+        )
         free_func = llvm.FuncOp(
             "free",
             llvm.LLVMFunctionType([llvm.LLVMPointerType.opaque()], None),
@@ -904,7 +909,7 @@ class LibBuilder:
             self.funcs,
         )
         module = ModuleOp(
-            [malloc_func, free_func, memcpy_func, memmove_func, abort_func, scope_op]
+            [malloc_func, realloc_func, free_func, memcpy_func, memmove_func, abort_func, scope_op]
         )
         module.verify()
 
@@ -963,8 +968,9 @@ class LibBuilder:
         if verbose > 1:
             print(module)
 
-        layout_graph = layout_graph_generator.layouts[scope_op]
-        iteration_map = iteration_map_generator.iteration_maps[scope_op]
+        layout_graph = layout_graph_generator.layouts.get(scope_op, LayoutGraph({}, [],[]))
+        iteration_map = iteration_map_generator.iteration_maps.get(scope_op, IterationMap({}))
+
 
         layout_graph.check_consistency()
         iteration_map.check_consistency()
@@ -1131,6 +1137,7 @@ class LibBuilder:
         llvm_only: bool = False,
         lib_path: str = None,
         clang_args: list[str] = None,
+        load: bool = True,
         verbose=2,
     ) -> DTLCLib | None:
         if dlt_func_map is None:
@@ -1149,7 +1156,7 @@ class LibBuilder:
             clang_args=clang_args,
             verbose=verbose,
         )
-        if llvm_only:
+        if llvm_only or not load:
             return None
         function_types = {name.data: v for name, v in function_types.items()}
         return DTLCLib(lib_path, dlt_func_map, function_types)
@@ -1161,8 +1168,9 @@ class LibBuilder:
         dlt_func_map: dict[str, FuncTypeDescriptor] = None,
         lib_path: str = None,
         clang_args: list[str] = None,
+        load: bool = True,
         verbose=2,
-    ) -> DTLCLib:
+    ) -> DTLCLib | None:
         if dlt_func_map is None:
             dlt_func_map = self.func_map
         if lib_path is None:
@@ -1174,8 +1182,11 @@ class LibBuilder:
         compilec.clang_compile(
             llvm_path, lib_path, extra_clang_args=clang_args, verbose=verbose
         )
-        function_types = {name.data: v for name, v in function_types.items()}
-        return DTLCLib(lib_path, dlt_func_map, function_types)
+        if load:
+            function_types = {name.data: v for name, v in function_types.items()}
+            return DTLCLib(lib_path, dlt_func_map, function_types)
+        else:
+            return None
 
     def build(self, verbose: int = 0):
 

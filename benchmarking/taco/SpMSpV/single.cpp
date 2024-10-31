@@ -5,7 +5,9 @@
 #define I ##I##
 #define J ##J##
 
-#define NNZ ##NNZ##
+#define NNZ_A ##NNZ_A##
+#define NNZ_B ##NNZ_B##
+#define NNZ_C ##NNZ_C##
 
 #define E ##Epsilon##
 
@@ -56,7 +58,7 @@ extern "C" void dealloc_C(Tensor<float>** r_c_ptr) {
 extern "C" void setup_A(Tensor<float>** a_ptr, int32_t* coord_0, int32_t* coord_1, float* vals){
 //    std::cout << "# setup_A" << std::endl;
     Tensor<float>* a = *a_ptr;
-    for(uint64_t idx = 0; idx < NNZ; idx++){
+    for(uint64_t idx = 0; idx < NNZ_A; idx++){
 
         int32_t c_0 = coord_0[idx];
         int32_t c_1 = coord_1[idx];
@@ -66,11 +68,13 @@ extern "C" void setup_A(Tensor<float>** a_ptr, int32_t* coord_0, int32_t* coord_
     a->pack();
 }
 
-extern "C" void setup_B(Tensor<float>** b_ptr, float* vals){
+extern "C" void setup_B(Tensor<float>** b_ptr, int32_t* coord_0, float* vals){
 //    std::cout << "setup_B" << std::endl;
     Tensor<float>* b = * b_ptr;
-    for(int j = 0; j < J; j++){
-            (*b)(j) = vals[j];
+    for(uint64_t idx = 0; idx < NNZ_B; idx++){
+        int32_t c_0 = coord_0[idx];
+        float val = vals[idx];
+        (*b)(c_0) = val;
     }
     b->pack();
 }
@@ -94,14 +98,14 @@ extern "C" void prepare(Tensor<float>** a_ptr, Tensor<float>** b_ptr, Tensor<flo
 	}
 }
 
-extern "C" void spmv(Tensor<float>** c_ptr, Tensor<float>** a_ptr, Tensor<float>** b_ptr) {
+extern "C" void spmspv(Tensor<float>** c_ptr, Tensor<float>** a_ptr, Tensor<float>** b_ptr) {
 //    std::cout << "matmul" << std::endl;
     Tensor<float> c = ** c_ptr;
     c.assemble();
     c.compute();
 }
 
-extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t* consistent_ret, Tensor<float>** c_ptr, float* vals, Tensor<float>** c_ptr_f) {
+extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t* consistent_ret, Tensor<float>** c_ptr, int32_t* coord_0, float* vals, Tensor<float>** c_ptr_f) {
 //    std::cout << "check_c" << std::endl;
     Tensor<float> c = **c_ptr;
     Tensor<float> c_f = **c_ptr_f;
@@ -109,34 +113,72 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
     float total_error = 0;
     bool total_consistent = 1;
 
+    auto value = c.begin();
     auto value_f = c_f.begin();
-    for(auto value = c.begin(); value != c.end(); ++value) {
+    int32_t idx = 0;
+    bool check_consistent = 1;
+//    std::cout << "# NNZ: " << NNZ_C << std::endl;
+    while((value != c.end()) && (idx < NNZ_C)) {
+//        std::cout << "# idx: " << idx << std::endl;
         auto coord = value->first;
         float c_v = value->second;
-//        std::cout << "coord: " << coord << " val: " << c_v << std::endl;
-        int i = coord[0];
-//        std::cout << "i: " << i << std::endl;
+        int c_i = coord[0];
+//        std::cout << "# c_i: " << c_i << std::endl;
 
-        float ref = vals[i];
-        float error = (c_v - ref);
+        int32_t ref_i = coord_0[idx];
+        float ref_v = vals[idx];
+//        std::cout << "# ref_i: " << ref_i << std::endl;
+
+//        std::cout << "# ref_v: " << ref_v << std::endl;
+//        std::cout << "# c_v: " << c_v << std::endl;
+        if (ref_i > c_i) {
+            ref_v = 0.0;
+        }
+        if (c_v > ref_i) {
+            c_v = 0.0;
+        }
+//        std::cout << "# ref_v: " << ref_v << " # c_v: " << c_v << std::endl;
+
+        float error = (c_v - ref_v);
+//        std::cout << "# error: " << error << std::endl;
         error = error > -error ? error : -error;
         float base_epsilon = E;
-        float epsilon = base_epsilon * (ref > -ref? ref : -ref);
+        float epsilon = base_epsilon * (ref_v > -ref_v? ref_v : -ref_v);
         bool correct = epsilon >= error;
 
-        bool coord_check = value->first == value_f->first;
-        float c_f_v = value_f->second;
-        if (!coord_check) {
-                std::cout << "coord mismatch!" << std::endl;
-                std::cout << "coord: " << coord << " f coord: " << value_f->first << std::endl;
+//        std::cout << "# check_consistent: " << check_consistent << std::endl;
+        if (check_consistent){
+            bool coord_check = coord == value_f->first;
+            float c_f_v = value_f->second;
+            if (!coord_check) {
+                    std::cout << "# coord mismatch!" << std::endl;
+                    std::cout << "# coord: " << coord << " f coord: " << value_f->first << std::endl;
+            }
+            bool consistent = c_f_v == c_v;
+            consistent &= coord_check;
+            total_consistent &= consistent;
         }
-        bool consistent = c_f_v == c_v;
-        consistent &= coord_check;
 
         total_correct &= correct;
         total_error += error;
-        total_consistent &= consistent;
-        ++value_f;
+
+
+        if (ref_i > c_i) {
+            ++value;
+            ++value_f;
+            check_consistent = 1;
+        }
+        if (c_v > ref_i) {
+            ++idx;
+            check_consistent = 0;
+        }
+        if (c_i == ref_i) {
+            ++value;
+            ++value_f;
+            ++idx;
+            check_consistent = 1;
+        }
+
     }
     *correct_ret = (uint64_t) total_correct;
     *total_error_ret = total_error;

@@ -510,7 +510,7 @@ def make_setup_func_coo(
     set_op = dlt.SetOp(select_op.res, builtin.f32, val_load_op.dereferenced_value)
     loop_block.add_ops([select_op, set_op])
 
-    # print_op = printf.PrintFormatOp("Set {} {} to {} ({}/{})", row_i64_op.result, col_i64_op.result, val_load_op.dereferenced_value, nnz_idx_i64, nnz_ub_i64)
+    # print_op = printf.PrintFormatOp("# Set " + ', '.join(["{}" for _ in coord_indices]) + " to {} ({}/{})", *coord_indices, val_load_op.dereferenced_value, nnz_idx_i64, ub)
     # loop_block.add_op(print_op)
 
     loop_block.add_op(scf.Yield())
@@ -617,7 +617,7 @@ def make_check_func_coo(
     for d in tensor_space.shape:
         func_arg_types.append(llvm.LLVMPointerType.opaque())  # each coord array for coo
     func_arg_types.append(llvm.LLVMPointerType.opaque())  # the val array
-    func_arg_types = [lib_builder.tensor_var_details[t_var]]  # the first DLT tensor
+    func_arg_types.append(lib_builder.tensor_var_details[t_var])  # the first DLT tensor
 
     check_block = Block(arg_types=func_arg_types)
     arg_tensor = check_block.args[0]
@@ -630,8 +630,8 @@ def make_check_func_coo(
 
     zero_op = arith.Constant(IntegerAttr(0, IndexType()))
     one_op = arith.Constant(IntegerAttr(1, IndexType()))
-    false_op = arith.Constant(IntegerAttr(0, IndexType()))
-    true_op = arith.Constant(IntegerAttr(1, IndexType()))
+    false_op = arith.Constant(IntegerAttr(0, IntegerType(1)))
+    true_op = arith.Constant(IntegerAttr(1, IntegerType(1)))
     f_zero_op = arith.Constant(builtin.FloatAttr(0.0, builtin.f32))
     f_epsilon_op = arith.Constant(builtin.FloatAttr(epsilon, builtin.f32))
     check_block.add_ops([zero_op, one_op, false_op, true_op, f_zero_op, f_epsilon_op])

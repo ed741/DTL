@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include "taco.h"
 #include "taco/format.h"
 
@@ -82,12 +83,21 @@ extern "C" void prepare(Tensor<float>** a_ptr, Tensor<float>** b_ptr, Tensor<flo
     IndexVar i, j, k;
     c(i,k) = a(i,j) * b(j,k);
     c.compile();
-    c.assemble();
+//    c.assemble();
+    auto code = c.getSource();
+    //Using stringstreams
+	std::istringstream iss(code);
+	std::string line;
+	int idx = 0;
+	while(std::getline(iss, line)) {
+		std::cout << "# " << idx++ << ": " << line << std::endl;
+	}
 }
 
 extern "C" void matmul(Tensor<float>** c_ptr, Tensor<float>** a_ptr, Tensor<float>** b_ptr) {
 //    std::cout << "matmul" << std::endl;
     Tensor<float> c = ** c_ptr;
+    c.assemble();
     c.compute();
 }
 

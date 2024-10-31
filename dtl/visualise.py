@@ -503,12 +503,12 @@ class IterationPlotter:
                 + (
                     "*"
                     if t_idx
-                    in [t.data for t in iteration_node.non_zero_reducible_tensors]
+                    in (t_idxs := [t.data for t in iteration_node.non_zero_reducible_tensors])
                     and extent_idx
                     in [
                         e.data
                         for e in iteration_node.non_zero_reducible_tensor_extents.data[
-                            t_idx
+                            t_idxs.index(t_idx)
                         ]
                     ]
                     else ""

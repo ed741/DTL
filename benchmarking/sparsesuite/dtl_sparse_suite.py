@@ -271,10 +271,10 @@ class SCircuit(SpMV):
         TupleStruct[TensorVariable], ReifyConfig]:
         return {
             a: ReifyConfig(
-                coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
             ),
             b: ReifyConfig(
-                coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
             ),
             c: ReifyConfig(dense=True, coo_minimum_dims=1),
         }
@@ -319,10 +319,10 @@ class Rajat21(SpMSpV):
         TupleStruct[TensorVariable], ReifyConfig]:
         return {
             a: ReifyConfig(
-                coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
             ),
             b: ReifyConfig(
-                coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
             ),
             c: ReifyConfig(dense=True, coo_minimum_dims=1),
         }

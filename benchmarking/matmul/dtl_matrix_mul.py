@@ -200,8 +200,8 @@ class Pair(MatMulDenseDTL[BasicDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            (a, b): ReifyConfig(coo_buffer_options=frozenset([])),
-            c: ReifyConfig(coo_buffer_options=frozenset([])),
+            (a, b): ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
+            c: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
         }
 
 
@@ -230,8 +230,8 @@ class Single(MatMulDenseDTL[BasicDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            a: ReifyConfig(coo_buffer_options=frozenset([0])),
-            b: ReifyConfig(coo_buffer_options=frozenset([0])),
+            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
+            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
             c: ReifyConfig(),
         }
 
@@ -298,8 +298,8 @@ class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            a: ReifyConfig(coo_buffer_options=frozenset([0])),
-            b: ReifyConfig(coo_buffer_options=frozenset([0])),
+            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
+            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
             c: ReifyConfig(),
         }
 

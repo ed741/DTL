@@ -41,7 +41,7 @@ def handle_tensor(
         nnz = ref_tensor.nnz
         for i, coord_array in enumerate(ref_tensor.coords):
             benchmark.handle_reference_array(
-                coord_array,
+                coord_array.astype(np.int32),
                 f"arrays/{data_set_name}/np_{name}_{i}",
                 is_arg,
                 is_res,

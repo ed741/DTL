@@ -325,6 +325,27 @@ class LayoutPlotter:
         label += ")"
         return {"label": _escape_text(label), "shape": "doubleoctagon"}, [(layout_node.child, "", "")]
 
+    @get_label.register
+    @staticmethod
+    def _(
+        layout_node: dlt.SeparatedCOOLayoutAttr,
+    ) -> tuple[dict[str, str], list[tuple[dlt.Layout, str, str]]]:
+        label = ("SCOO: ["
+                 + ",".join([_print_to_str(dim) for dim in layout_node.dimensions])
+                 + "] (")
+        if layout_node.buffer_scaler.data < 0:
+            label += "+"
+            label += str(abs(layout_node.buffer_scaler.data))
+        elif layout_node.buffer_scaler.data == 0:
+            label += "-"
+        elif layout_node.buffer_scaler.data > 0:
+            label += "*"
+            label += str(layout_node.buffer_scaler.data)
+        else:
+            assert False
+        label += ")"
+        return {"label": _escape_text(label), "shape": "doubleoctagon"}, [(layout_node.child, "", "")]
+
 
 class IterationPlotter:
 

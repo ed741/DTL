@@ -278,7 +278,7 @@ class StaticPair(Mttkrp):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            (a, b): ReifyConfig(coo_buffer_options=frozenset([0])),
+            (a, b): ReifyConfig(unpacked_coo_buffer_options=frozenset([0])),
             c: ReifyConfig(),
         }
 
@@ -343,8 +343,8 @@ class StaticSingles(MatMul):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            a: ReifyConfig(coo_buffer_options=frozenset([0])),
-            b: ReifyConfig(coo_buffer_options=frozenset([0])),
+            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([0])),
+            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([0])),
             c: ReifyConfig(),
         }
 

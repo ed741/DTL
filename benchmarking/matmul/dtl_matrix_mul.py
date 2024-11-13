@@ -261,9 +261,9 @@ class MatMulSparseDTLTest(BasicDTLTest):
 
 class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
     def __init__(self, *args, rate_a: float = 0.0, rate_b: float = 0.0, **kwargs):
-        super().__init__(*args, **kwargs)
         self.rate_a = rate_a
         self.rate_b = rate_b
+        super().__init__(*args, **kwargs)
 
     def get_self_name(self) -> str:
         return "random_sparse"

@@ -11,6 +11,7 @@ from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, overload
 
 import nptyping
 import numpy as np
+import psutil
 
 from benchmarking import benchmarkRunner
 
@@ -65,14 +66,18 @@ L = TypeVar('L')
 
 @dataclass(frozen=True)
 class BenchmarkSettings:
-    runs: int = 10,
-    repeats: int = 3,
-    waste_of_time_threshold: float = 0.1,
-    test_too_short_threshold: float = 0.001,
-    long_run_multiplier: int = 100,
-    benchmark_timeout: float = 3,
-    benchmark_trial_child_process: bool = True,
-    benchmark_in_child_process: bool = False,
+    runs: int = 10
+    repeats: int = 3
+    waste_of_time_threshold: float = 0.1
+    test_too_short_threshold: float = 0.001
+    long_run_multiplier: int = 100
+    setup_timeout: float = 3
+    benchmark_timeout: float = 3
+    testing_timeout: float = 3
+    tear_down_timeout: float = 3
+    benchmark_trial_child_process: bool = True
+    benchmark_in_child_process: bool = False
+    ram_use_cap: float = 0.75
 
 class Benchmark(abc.ABC, Generic[T, L]):
 
@@ -115,7 +120,9 @@ class Benchmark(abc.ABC, Generic[T, L]):
     def parse_options(self, benchmark_options: list[str] = None) -> Options:
         if benchmark_options is None:
             return {}
-        return {"skip_testing":"--skip_testing" in benchmark_options}
+        return {"skip-testing":"--skip-testing" in benchmark_options,
+                   "valgrind":"--valgrind" in benchmark_options,
+                "no-timeout":"--no-timeout" in benchmark_options,}
 
     def run(self, benchmark_options: list[str] = None):
         options = self.parse_options(benchmark_options)
@@ -322,7 +329,7 @@ class Benchmark(abc.ABC, Generic[T, L]):
                         self.log(f"Skipping test id: {test.get_id_str()}, rep: {rep} as it is already in the results file")
                         continue
                     char_count = self.start_inline_log(f"Running benchmark repeat :: test id: {test.get_id_str()}, rep: {rep}, runs: {runs_to_do}, ")
-                    if options["skip_testing"]:
+                    if options["skip-testing"]:
                         self.end_inline_log(char_count, f"Skipping testing")
                         continue
 
@@ -332,13 +339,15 @@ class Benchmark(abc.ABC, Generic[T, L]):
                     self.write_result(test, rep, universal_results, results)
                     runs_done, test_time, wait_time, finished = universal_results
                     assert runs_done == runs_to_do
-                    self.end_inline_log(char_count, f"time: {test_time}, wait: {wait_time}, finished: {finished}")
+                    universal_result_string = f"time: {test_time}, wait: {wait_time}, finished: {finished}"
+                    custom_result_string = ", ".join([f"{n}: {r}" for ((n, t), r) in zip(test.get_result_headings(), results)])
+                    self.end_inline_log(char_count, universal_result_string + " :: " + custom_result_string)
             self.close_lib()
         print(f"finished")
 
     def get_runs_to_do(self, test: T, loaded_results: Res_Dict, options: Options) -> int:
         if (test.get_id(), -1) in loaded_results:
-            (test_runs, test_time, test_w_time, test_fin), test_res = loaded_results[(test.get_id(), -1)]
+            (test_runs, test_time, test_w_time, test_fin), res = loaded_results[(test.get_id(), -1)]
             count = self.start_inline_log(f"Trail test result found in loaded results: ", "...")
         else:
             lib = self.get_lib(test, options)
@@ -347,7 +356,7 @@ class Benchmark(abc.ABC, Generic[T, L]):
                 return 0
             if self.settings.benchmark_trial_child_process:
                 count = self.start_inline_log(f"Trail test starting in new process: ")
-                u_res, res = self.run_external_test(test, 1, -1)
+                u_res, res = self.run_external_test(test, 1, -1, options)
                 self.write_result(test, -1, u_res, res)
                 test_runs, test_time, test_w_time, test_fin = u_res
             else:
@@ -355,14 +364,17 @@ class Benchmark(abc.ABC, Generic[T, L]):
                 u_res, res = self.run_internal_test(test, lib, 1)
                 self.write_result(test, -1, u_res, res)
                 test_runs, test_time, test_w_time, test_fin = u_res
-        self.end_inline_log(count, f"runs: {test_runs}, time: {test_time}, wait time: {test_w_time}, finished: {test_fin}")
+        # self.end_inline_log(count, f"runs: {test_runs}, time: {test_time}, wait time: {test_w_time}, finished: {test_fin}")
+        universal_result_string = f"runs: {test_runs}, time: {test_time}, wait time: {test_w_time}, finished: {test_fin}"
+        custom_result_string = ", ".join([f"{n}: {r}" for ((n, t), r) in zip(test.get_result_headings(), res)])
+        self.end_inline_log(count, universal_result_string + " :: " + custom_result_string)
         trial_time = test_time / test_runs
         return self.get_runs_for_time(trial_time)
 
     def run_test(self, test: T, runs: int, rep: int, options: Options) -> tuple[U_Res_Tuple, Res_Tuple]:
         if self.settings.benchmark_in_child_process:
             lib = self.get_lib(test, options, load=False)
-            return self.run_external_test(test, runs, rep)
+            return self.run_external_test(test, runs, rep, options)
         else:
             lib = self.get_lib(test, options, load=True)
             return self.run_internal_test(test, lib, runs)
@@ -384,19 +396,17 @@ class Benchmark(abc.ABC, Generic[T, L]):
         waiting_time = time.time() - start_time
         return (runs, test_time, waiting_time, True), res
 
-    def dump_test_output(self, dump_dir: str, output: str, err: str, info: str):
-        path = f"{dump_dir}/{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
-        os.makedirs(path, exist_ok=False)
-        with open(f"{path}/stdout", "w") as f:
-            f.write(output)
-        with open(f"{path}/stderr", "w") as f:
-            f.write(err)
-        with open(f"{path}/info", "w") as f:
-            f.write(info)
+    def run_external_test(self,  test: T, runs: int, rep: int, options: Options) -> tuple[U_Res_Tuple, Res_Tuple]:
 
-    def run_external_test(self,  test: T, runs: int, rep: int) -> tuple[U_Res_Tuple, Res_Tuple]:
+        dump_dir = f"{test.get_test_path(self.get_dump_path())}/{test.get_id_str()}/{rep}"
+        dump_path = f"{dump_dir}/{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
+        os.makedirs(dump_path, exist_ok=False)
+
+
         count = self.inline_log(0, "setting up")
         args = []
+        if options["valgrind"]:
+            args.extend(["valgrind", "--leak-check=full", "--track-origins=yes"])
         args.extend(["python", "benchmarking/benchmarkRunner.py"])
         args.append(f"{runs}")
         np_type_map = {np.float32: ":f32", np.float64: ":f64", np.int32: ":i32", np.int64: ":i64"}
@@ -413,62 +423,201 @@ class Benchmark(abc.ABC, Generic[T, L]):
         args.extend(["--benchmark", test.code.benchmark])
         args.extend(["--test", test.code.test])
         args.extend(["--clean", test.code.clean])
-        args.extend(["-pt"])
+        args.extend(["-ptg"])
 
         current_env = os.environ.copy()
-        count = self.inline_log(count, "starting")
-        start_time = time.time()
-        process_benchmark = subprocess.Popen(
-            args, env=current_env, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdout=subprocess.PIPE, text=True,
-        )
-        count = self.inline_log(count, "waiting for benchmark process")
 
-        finished = False
-        try:
-            out, err = process_benchmark.communicate(timeout=self.settings.benchmark_timeout*runs)
-            finished = True
-            waiting_time = time.time() - start_time
-            self.inline_log(count,"finished, ")
-        except subprocess.TimeoutExpired as _:
-            waiting_time = time.time() - start_time
-            count = self.inline_log(count, "timed out")
-            process_benchmark.kill()
-            out, err = process_benchmark.communicate()
-            self.inline_log(count, "killed, ")
-
-        split_out = out.split("\n")
-        split_out = [s for s in split_out if not s.startswith("#")]
-
-        dump_path = f"{test.get_test_path(self.get_dump_path())}/{test.get_id_str()}/{rep}"
-        info = (f"Process return code: {process_benchmark.returncode}\n")
-        self.dump_test_output(dump_path, out, err, info)
+        def abort_test(oc, process, msg:str = ""):
+            c = self.inline_log(0, "timed out")
+            process.kill()
+            c = self.inline_log(c, f"{msg}killed, ")
+            return c + oc
 
 
-        if len(split_out) != 1 + len(test.get_result_headings()) + 1:
+        with open(f"{dump_path}/stdout", "w") as write_stdout, open(f"{dump_path}/stderr", "w") as write_stderr, open(f"{dump_path}/stdout", "r", 1) as read_stdout:
+            count = self.inline_log(count, "starting")
+            start_time = time.time()
+            process_benchmark = subprocess.Popen(
+                args, env=current_env, stdin=None, stderr=write_stderr,
+                stdout=write_stdout, text=True,
+            )
+            process_live = True
+            exit_code = None
+            count = self.inline_log(count, "waiting for benchmark process")
+
+            busy_wait_time = 1.0
+            out = []
+            info_strings = []
+
+            max_ram_usage = 0
+
+            # setup_done = False
+            # section_start = time.time()
+            # wait_time = self.settings.setup_timeout*runs
+            # if process_live:
+            #     count = self.inline_log(count, "benchmark process: setup, ")
+            #     loop_count = self.inline_log(0,"")
+            #     while process_live and not setup_done:
+            #         loop_count = self.inline_log(loop_count, ".", append=True)
+            #         ram_usage = psutil.virtual_memory()[2]/100.0
+            #         max_ram_usage = max(max_ram_usage, ram_usage)
+            #         if ram_usage > self.settings.ram_use_cap:
+            #             loop_count = self.inline_log(loop_count, "")
+            #             count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage*100.0)}, ")
+            #             info_strings.append(f"Aborting due to Ram usage reaching {ram_usage*100.0}%")
+            #         try:
+            #             exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
+            #             process_live = False
+            #         except subprocess.TimeoutExpired as _:
+            #             pass
+            #         current_output = read_stdout.read()
+            #         current_lines = current_output.splitlines()
+            #         out.extend([l for l in current_lines if not l.strip().startswith("#")])
+            #         setup_done = "~setup-done~" in out
+            #         if process_live and not setup_done and time.time() - section_start > wait_time:
+            #             loop_count = self.inline_log(loop_count, "")
+            #             count = abort_test(count, process_benchmark)
+            #             info_strings.append(f"Aborting due to time")
+            #             process_live = False
+            #     loop_count = self.inline_log(loop_count, "")
+            # info_strings.append(f"setup took {time.time()-section_start}s")
+            #
+            # benchmark_done = False
+            # section_start = time.time()
+            # wait_time = self.settings.benchmark_timeout * runs
+            # if process_live:
+            #     count = self.inline_log(count, "benchmark process: benchmarking, ")
+            #     loop_count = self.inline_log(0,"")
+            #     ram_usage = psutil.virtual_memory()[2] / 100.0
+            #     max_ram_usage = max(max_ram_usage, ram_usage)
+            #     if ram_usage > self.settings.ram_use_cap:
+            #         loop_count = self.inline_log(loop_count, "")
+            #         count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage * 100.0)}, ")
+            #         info_strings.append(f"Aborting due to Ram usage reaching {ram_usage * 100.0}%")
+            #     while process_live and not benchmark_done:
+            #         loop_count = self.inline_log(loop_count, ".", append=True)
+            #         try:
+            #             exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
+            #             process_live = False
+            #         except subprocess.TimeoutExpired as _:
+            #             pass
+            #         current_output = read_stdout.read()
+            #         current_lines = current_output.splitlines()
+            #         out.extend([l for l in current_lines if not l.strip().startswith("#")])
+            #         benchmark_done = "~benchmark-done~" in out
+            #         if process_live and not benchmark_done and time.time() - section_start > wait_time:
+            #             loop_count = self.inline_log(loop_count, "")
+            #             count = abort_test(count, process_benchmark)
+            #             info_strings.append(f"Aborting due to time")
+            #     loop_count = self.inline_log(loop_count, "")
+            # info_strings.append(f"benchmarking took {time.time() - section_start}s")
+            #
+            # testing_done = False
+            # section_start = time.time()
+            # wait_time = self.settings.testing_timeout * runs
+            # if process_live:
+            #     count = self.inline_log(count, "benchmark process: testing, ")
+            #     loop_count = self.inline_log(0,"")
+            #     ram_usage = psutil.virtual_memory()[2] / 100.0
+            #     max_ram_usage = max(max_ram_usage, ram_usage)
+            #     if ram_usage > self.settings.ram_use_cap:
+            #         loop_count = self.inline_log(loop_count, "")
+            #         count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage * 100.0)}, ")
+            #         info_strings.append(f"Aborting due to Ram usage reaching {ram_usage * 100.0}%")
+            #     while process_live and not testing_done:
+            #         loop_count = self.inline_log(loop_count, ".", append=True)
+            #         try:
+            #             exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
+            #             process_live = False
+            #         except subprocess.TimeoutExpired as _:
+            #             pass
+            #         current_output = read_stdout.read()
+            #         current_lines = current_output.splitlines()
+            #         out.extend([l for l in current_lines if not l.strip().startswith("#")])
+            #         testing_done = "~testing-done~" in out
+            #         if process_live and not testing_done and time.time() - section_start > wait_time:
+            #             loop_count = self.inline_log(loop_count, "")
+            #             count = abort_test(count, process_benchmark)
+            #             info_strings.append(f"Aborting due to time")
+            #     loop_count = self.inline_log(loop_count, "")
+            # info_strings.append(f"testing took {time.time() - section_start}s")
+
+            testing_sections = [("setup", "~setup-done~", self.settings.setup_timeout),
+                                ("benchmark", "~benchmark-done~", self.settings.benchmark_timeout),
+                                ("testing", "~testing-done~", self.settings.testing_timeout),
+                                ("tear down", "~tear-down-done~", self.settings.tear_down_timeout)]
+            for section_name, section_tag, section_timeout in testing_sections:
+                if not process_live:
+                    break
+                section_done = False
+                section_start = time.time()
+                wait_time = section_timeout * runs
+                count = self.inline_log(count, f"benchmark process: {section_name}, ")
+                loop_count = self.inline_log(0,"")
+                ram_usage = psutil.virtual_memory()[2] / 100.0
+                max_ram_usage = max(max_ram_usage, ram_usage)
+                if ram_usage > self.settings.ram_use_cap:
+                    loop_count = self.inline_log(loop_count, "")
+                    count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage * 100.0)}, ")
+                    info_strings.append(f"Aborting due to Ram usage reaching {ram_usage * 100.0}%")
+                while process_live and not section_done:
+                    loop_count = self.inline_log(loop_count, ".", append=True)
+                    try:
+                        exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
+                        process_live = False
+                    except subprocess.TimeoutExpired as _:
+                        pass
+                    current_output = read_stdout.read()
+                    current_lines = current_output.splitlines()
+                    out.extend([l for l in current_lines if not l.strip().startswith("#")])
+                    section_done = section_tag in out
+                    if process_live and not section_done and time.time() - section_start > wait_time:
+                        loop_count = self.inline_log(loop_count, "")
+                        if options["no-timeout"]:
+                            count = self.inline_log(count, "Not Aborting, but we should have")
+                            info_strings.append(f"Not Aborting due to time (though time reached)")
+                        else:
+                            count = abort_test(count, process_benchmark)
+                            info_strings.append(f"Aborting due to time")
+                loop_count = self.inline_log(loop_count, "")
+                info_strings.append(f"{section_name} took {time.time() - section_start}s")
+
+            process_benchmark.communicate()
+        waiting_time = time.time() - start_time
+        finished = all(status in out for status in ["~setup-done~", "~benchmark-done~", "~testing-done~", "~tear-down-done~", "~results-done~"])
+
+        split_out = [s for s in out if not s.startswith("~")]
+
+        info_strings.append(f"Ram usage (measured) peaked at {max_ram_usage}")
+        info_strings.append(f"Process return code: {process_benchmark.returncode}")
+        with open(f"{dump_path}/info", "w") as f:
+            for line in info_strings:
+                f.write(f"{line}\n")
+
+        if len(split_out) != 1 + len(test.get_result_headings()):
             if finished:
                 self.end_inline_log(count, " ERROR", append=True)
-                self.log(f"{len(split_out)} != 1 + {len(test.get_result_headings())} + 1")
+                self.log(f"{len(split_out)} != 1 + {len(test.get_result_headings())}")
                 self.log(f"Process return code: {process_benchmark.returncode}", error=True)
                 self.log(f" Test finished but output is: {split_out} ", error=True)
-                self.log(f" outputs from process:\n out: {out}\n err: {err}", error=True)
+                self.log(f" outputs from process stored in {dump_path}", error=True)
                 return (runs, -1.0, waiting_time, True), self._non_result_for(test.get_result_headings())
             else:
                 return (runs, -1.0, waiting_time, False), self._non_result_for(test.get_result_headings())
 
         try:
-            res_part = split_out[1:-1]
+            res_part = split_out[1:]
             res = self.get_test_result_from_list(res_part, only_res=True)
         except ValueError as e:
             self.end_inline_log(count, " ERROR", append=True)
             self.log(f"Process exit code: {process_benchmark.returncode}", error=True)
             self.log(f" Test finished but output is: {split_out} ", error=True)
-            self.log(
-                f" outputs from process:\n out: {out} : {out}\n err: {err} : {err.decode('utf8') if err is not None else ''}",
-                error=True)
+            self.log(f" outputs from process stored in {dump_path}", error=True)
             self.log(str(e), error=True)
             return (runs, -2.0, waiting_time, finished), self._non_result_for(test.get_result_headings())
 
+        if exit_code == 0:
+            self.inline_log(count, "")
         u_res = runs, float(split_out[0]), waiting_time, finished
         return u_res, res
 

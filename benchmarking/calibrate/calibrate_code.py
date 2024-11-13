@@ -7,6 +7,7 @@ from benchmarking.benchmark import TestCode
 calibrate_code = TestCode(
     setup="""
 root, (a) = lib.init_A()
+lib.setup_A(a, ref_a)
 lib.prepare(a)
 """,
     benchmark="""

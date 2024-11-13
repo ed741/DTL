@@ -14,7 +14,7 @@ from dtl.dag import RealVectorSpace, Index
 from dtl.libBuilder import LibBuilder, StructType, TupleStruct
 from benchmarking.dtlBenchmark import DLTCompileContext, DTLBenchmark, T_DTL, make_check_func_dense, \
     make_setup_func_dense
-from xdsl.dialects import func
+from xdsl.dialects import builtin, func
 from xdsl.ir import Block
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
     IterationMapping,
@@ -200,8 +200,8 @@ class Pair(MatMulDenseDTL[BasicDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            (a, b): ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
-            c: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
+            (a, b): ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
+            c: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
         }
 
 
@@ -230,8 +230,8 @@ class Single(MatMulDenseDTL[BasicDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
-            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
+            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
+            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
             c: ReifyConfig(),
         }
 
@@ -298,9 +298,9 @@ class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
-            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([0]), separated_coo_buffer_options=frozenset([0])),
-            c: ReifyConfig(),
+            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
+            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
+            c: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32]))
         }
 
 
@@ -334,7 +334,10 @@ if __name__ == "__main__":
         waste_of_time_threshold=0.1,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
-        benchmark_timeout=3.0,
+        setup_timeout=2.0,
+        benchmark_timeout=1.0,
+        testing_timeout=2.0,
+        tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
     )
     settings_8 = BenchmarkSettings(
@@ -343,7 +346,10 @@ if __name__ == "__main__":
         waste_of_time_threshold=0.01,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
-        benchmark_timeout=3.0,
+        setup_timeout=2.0,
+        benchmark_timeout=1.0,
+        testing_timeout=2.0,
+        tear_down_timeout=2.0,
         benchmark_trial_child_process=False,
     )
 
@@ -476,7 +482,10 @@ if __name__ == "__main__":
         waste_of_time_threshold=0.1,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
+        setup_timeout=2.0,
         benchmark_timeout=3.0,
+        testing_timeout=2.0,
+        tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
     )
 

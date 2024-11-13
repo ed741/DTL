@@ -13,7 +13,8 @@ def mlir_compile(
     llvm_out: str = None,
     llvm_only: bool = False,
     clang_args: list[str] = None,
-    verbose=2,
+    enable_debug: bool = False,
+    verbose: int =2,
 ):
     # if header_out==None:
     #     header_out = lib_output.removesuffix(".o") + ".h"
@@ -25,6 +26,8 @@ def mlir_compile(
         print("Module:")
         print(module)
 
+    module.verify()
+
     if verbose > 1:
         print("mlir output:")
     xdsl_module = StringIO()
@@ -33,11 +36,11 @@ def mlir_compile(
     if verbose > 1:
         print(xdsl_module.getvalue())
 
-    # mlir_tmp_fd, mlir_tmp_path = tempfile.mkstemp()
-    # if verbose > 0:
-    #     print(f"Making tmp mlir - IR file: {mlir_tmp_path}")
-    # with os.fdopen(mlir_tmp_fd, 'wb') as mlir_tmp:
-    #     mlir_tmp.write(xdsl_module.getvalue().encode('utf8'))
+    if verbose > 3:
+        mlir_tmp_fd, mlir_tmp_path = tempfile.mkstemp()
+        print(f"Making tmp mlir - IR file: {mlir_tmp_path}")
+        with os.fdopen(mlir_tmp_fd, 'wb') as mlir_tmp:
+            mlir_tmp.write(xdsl_module.getvalue().encode('utf8'))
 
     if verbose > 1:
         print("mlir-opt:")
@@ -92,7 +95,7 @@ def mlir_compile(
                 llvm_tmp.write(mlir_translate_out)
                 llvm_tmp.flush()
             if not llvm_only:
-                clang_compile(llvm_out, lib_output, extra_clang_args=clang_args, verbose=verbose)
+                clang_compile(llvm_out, lib_output, extra_clang_args=clang_args, enable_debug=enable_debug, verbose=verbose)
         finally:
             os.remove(llvm_out)
     else:
@@ -103,22 +106,36 @@ def mlir_compile(
             llvm_fd.write(mlir_translate_out)
             llvm_fd.flush()
         if not llvm_only:
-            clang_compile(llvm_out, lib_output, extra_clang_args=clang_args, verbose=verbose)
+            clang_compile(llvm_out, lib_output, extra_clang_args=clang_args, enable_debug=enable_debug, verbose=verbose)
 
     if verbose > 0:
         print("Done compiling with mlir / clang")
 
 
-def clang_compile(input_path: str, lib_output: str, extra_clang_args: list[str] = None, verbose: int = 2):
+def clang_compile(input_path: str, lib_output: str, extra_clang_args: list[str] = None, enable_debug: bool=False, verbose: int = 2):
     if extra_clang_args is None:
         extra_clang_args = []
+
+    if enable_debug:
+        # opt ./native_debugging/lib_29734_1.db.ll --enable-debugify -o ./native_debugging/lib_29734_1.db.g.ll -S
+        debug_llvm_path = lib_output + ".g.ll"
+        opt_args = ["opt", "--enable-debugify", input_path, "-o", debug_llvm_path, "-S"]
+        if verbose > 1:
+            print(" ".join(opt_args))
+        process_opt = subprocess.Popen(
+            opt_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE
+        )
+        process_opt.wait()
+        input_path = debug_llvm_path
+
 
     clang_args = ["clang"]
     clang_args.extend(["-o", lib_output])
     clang_args.append("-shared")
     clang_args.append("-Wno-override-module")
     # clang_args.append("-v")
-    # clang_args.append("-g")
+    if enable_debug:
+        clang_args.append("-g")
     # clang_args.append("-O3")
     clang_args.extend(extra_clang_args)
     clang_args.append(input_path)

@@ -18,9 +18,9 @@ from benchmarking.benchmark import (
 from dtl import TensorSpace, TensorVariable
 from dtl.libBuilder import DTLCLib, LibBuilder, NpArrayCtype, TupleStruct
 from xdsl.dialects import arith, builtin, func, llvm, printf, scf
-from xdsl.dialects.builtin import IndexType, IntegerAttr, IntegerType, ModuleOp
+from xdsl.dialects.builtin import ArrayAttr, IndexType, IntegerAttr, IntegerType, ModuleOp
 from xdsl.dialects.experimental import dlt
-from xdsl.dialects.experimental.dlt import DimensionAttr
+from xdsl.dialects.experimental.dlt import DimensionAttr, SetAttr
 from xdsl.ir import Block, Operation, SSAValue
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
     IterationGenerator,
@@ -159,6 +159,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         options["no-mlir"] = "--no-mlir" in benchmark_options
         options["do-not-lower"] = "--do-not-lower" in benchmark_options
         options["do-not-generate"] = "--do-not-generate" in benchmark_options
+        options["llvm-debug"] = "--llvm-debug" in benchmark_options
 
         only_layouts = set()
         only_orders = set()
@@ -187,7 +188,9 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
 
         return options
 
-    def get_extra_clang_args(self) -> list[str]:
+    def get_extra_clang_args(self, options: Options) -> list[str]:
+        if options["llvm-debug"]:
+            return []
         match self.opt_num:
             case 0:
                 return []
@@ -397,7 +400,8 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                     function_types,
                     dlt_func_map=dlt_func_types,
                     lib_path=lib_path,
-                    clang_args=self.get_extra_clang_args(),
+                    clang_args=self.get_extra_clang_args(options),
+                    enable_debug=options["llvm-debug"],
                     load=load,
                     verbose=0,
                 )
@@ -429,8 +433,9 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                     llvm_out=llvm_path,
                     llvm_only=options["only-to-llvm"],
                     lib_path=lib_path,
-                    clang_args=self.get_extra_clang_args(),
+                    clang_args=self.get_extra_clang_args(options),
                     load=load,
+                    enable_debug=options["llvm-debug"],
                     verbose=0,
                 )
                 if options["only-to-llvm"]:
@@ -444,7 +449,6 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                         f"compiled to binary. LLVM: generated, lib: {lib._library_path}",
                     )
                     return lib
-
 
 def make_setup_func_coo(
     lib_builder: LibBuilder, name: str, t_var: TensorVariable, nnz: int
@@ -465,58 +469,81 @@ def make_setup_func_coo(
 
     zero_op = arith.Constant(IntegerAttr(0, IndexType()))
     one_op = arith.Constant(IntegerAttr(1, IndexType()))
-    setup_block.add_ops([zero_op, one_op])
-
     nnz_ub_op = arith.Constant(IntegerAttr(nnz, IndexType()))
-    setup_block.add_ops([nnz_ub_op])
+    setup_block.add_ops([zero_op, one_op, nnz_ub_op])
 
-    lb = zero_op.result
-    step = one_op.result
-    ub = nnz_ub_op.result
+    one_i64_op = arith.Constant(IntegerAttr(1, builtin.i64))
+    setup_block.add_op(one_i64_op)
 
-    loop_block = Block(arg_types=[IndexType()])
-    nnz_index_cast_op = builtin.UnrealizedConversionCastOp.get(
-        [loop_block.args[0]], [builtin.i64]
+    dlt_s_coo_indexing_struct = llvm.LLVMStructType.from_type_list(
+        ([llvm.LLVMPointerType.opaque()]*len(args_np_ptr_coord))
+        + [llvm.LLVMPointerType.opaque(), IndexType(), IndexType()]
     )
-    loop_block.add_op(nnz_index_cast_op)
-    nnz_idx_i64 = nnz_index_cast_op.outputs[0]
+    dlt_indexing_buffer_op = llvm.AllocaOp(one_i64_op.result, dlt_s_coo_indexing_struct)
+    setup_block.add_op(dlt_indexing_buffer_op)
 
-    coord_indices = []
-    for arg_np_ptr_coord in args_np_ptr_coord:
-        ptr_op = llvm.GEPOp(
-            arg_np_ptr_coord,
-            [0, llvm.GEP_USE_SSA_VAL],
-            [nnz_idx_i64],
-            pointee_type=llvm.LLVMArrayType.from_size_and_type(nnz, builtin.i32),
-        )
-        load_op = llvm.LoadOp(ptr_op.result, builtin.i32)
-        coord_i64_op = arith.ExtUIOp(load_op.dereferenced_value, builtin.i64)
-        coord_index_op = builtin.UnrealizedConversionCastOp.get(
-            [coord_i64_op.result], [IndexType()]
-        )
-        loop_block.add_ops([ptr_op, load_op, coord_i64_op, coord_index_op])
-        coord_indices.append(coord_index_op.outputs[0])
+    idx_range_start_ptr_op = llvm.GEPOp(dlt_indexing_buffer_op.res, [0, len(args_np_ptr_coord) + 1], [], pointee_type=dlt_s_coo_indexing_struct)
+    idx_range_end_ptr_op = llvm.GEPOp(dlt_indexing_buffer_op.res, [0, len(args_np_ptr_coord) + 2], [], pointee_type=dlt_s_coo_indexing_struct)
+    idx_range_start_store_op = llvm.StoreOp(zero_op.result, idx_range_start_ptr_op)
+    idx_range_end_store_op = llvm.StoreOp(nnz_ub_op.result, idx_range_end_ptr_op)
+    setup_block.add_ops([idx_range_start_ptr_op, idx_range_end_ptr_op, idx_range_start_store_op, idx_range_end_store_op])
 
-    val_ptr_arith_op = llvm.GEPOp(
-        arg_np_ptr_val,
-        [0, llvm.GEP_USE_SSA_VAL],
-        [nnz_idx_i64],
-        pointee_type=llvm.LLVMArrayType.from_size_and_type(nnz, builtin.f32),
+    for i, ptr in enumerate(list(args_np_ptr_coord)+[arg_np_ptr_val]):
+        current_indexing_buffer_ptr_op = llvm.GEPOp(dlt_indexing_buffer_op.res, [0,i], [], pointee_type=dlt_s_coo_indexing_struct)
+        current_buffer_store_op = llvm.StoreOp(ptr, current_indexing_buffer_ptr_op.result)
+        setup_block.add_ops([current_indexing_buffer_ptr_op, current_buffer_store_op])
+
+    dlt_ref_ptr_llvm_struct = llvm.LLVMStructType.from_type_list([llvm.LLVMPointerType.opaque()])
+    dlt_ref_ptr_undef_op = llvm.UndefOp(dlt_ref_ptr_llvm_struct)
+    dlt_ref_ptr_op = llvm.InsertValueOp(builtin.DenseArrayBase.from_list(builtin.i64, [0]), dlt_ref_ptr_undef_op.res, dlt_indexing_buffer_op.res)
+    setup_block.add_ops([dlt_ref_ptr_undef_op, dlt_ref_ptr_op])
+
+    dlt_coo_dims = [dlt.DimensionAttr(f"ref_{name}_{i}", d.extent) for i, d in enumerate(arg_tensor_dims)]
+    dlt_ref_ptr_layout = dlt.IndexingLayoutAttr(dlt.PrimitiveLayoutAttr(dlt.IndexRangeType()), dlt.SeparatedCOOLayoutAttr(dlt.PrimitiveLayoutAttr(builtin.f32), dlt_coo_dims, buffer_scaler=0, index_buffer_types=[builtin.i32 for _ in dlt_coo_dims]))
+    dlt_ptr_type = dlt.PtrType(dlt_ref_ptr_layout.contents_type, dlt_ref_ptr_layout, identity=f"ref_{name}_ptr")
+    dlt_ptr_cast_op = builtin.UnrealizedConversionCastOp.get([dlt_ref_ptr_op.res], [dlt_ptr_type])
+    setup_block.add_op(dlt_ptr_cast_op)
+    dlt_ref_ptr = dlt_ptr_cast_op.outputs[0]
+
+    dlt_inner_ptr_type = dlt.PtrType(dlt_ref_ptr_layout.contents_type.select_dimensions(dlt_coo_dims), dlt_ref_ptr_layout, SetAttr([]), ArrayAttr(dlt_coo_dims), identity=f"ref_{name}_ptr_inner")
+    iterate_block = Block(arg_types=[IndexType() for _ in dlt_coo_dims] + [dlt_inner_ptr_type] + [IndexType()])
+    extents = iterate_block.args[:len(dlt_coo_dims)]
+    dlt_ref_inner_ptr = iterate_block.args[len(dlt_coo_dims)]
+    inc_idx = iterate_block.args[len(dlt_coo_dims)+1]
+
+
+    dlt_ref_get_op = dlt.GetSOp(dlt_ref_inner_ptr, builtin.f32)
+    iterate_block.add_op(dlt_ref_get_op)
+    ref_value = dlt_ref_get_op.res
+    # print_op = printf.PrintFormatOp(f"# {name}: " + "{} Ref " + ', '.join(["{}" for _ in extents]) + " to {} ({})", inc_idx, *extents, ref_value, dlt_ref_get_op.found)
+    # iterate_block.add_op(print_op)
+
+    dlt_sel_ptr_op = dlt.SelectOp(arg_tensor, [], arg_tensor_dims, extents)
+    iterate_block.add_op(dlt_sel_ptr_op)
+    dlt_set_ptr_op = dlt.SetOp(dlt_sel_ptr_op.res, builtin.f32, ref_value)
+    iterate_block.add_op(dlt_set_ptr_op)
+
+    inc_add_op = arith.Addi(inc_idx, one_op.result)
+    iterate_block.add_op(inc_add_op)
+    iterate_block.add_op(dlt.IterateYieldOp(inc_add_op.result))
+
+    order = dlt.NonZeroIterationOrderAttr(list(range(len(dlt_coo_dims))), 0, dlt.BodyIterationOrderAttr())
+    # order = dlt.BodyIterationOrderAttr()
+    # for i in reversed(list(range(len(dlt_coo_dims)))):
+    #     order = dlt.NestedIterationOrderAttr(i, order)
+    iterate_op = dlt.IterateOp(
+        [d.extent for d in dlt_coo_dims],
+        [],
+        [[[d] for d in dlt_coo_dims]],
+        [dlt_ref_ptr],
+        [zero_op.result],
+        order,
+        f"{name}_ref_loop",
+        iterate_block,
     )
-    val_load_op = llvm.LoadOp(val_ptr_arith_op.result, builtin.f32)
-    loop_block.add_ops([val_ptr_arith_op, val_load_op])
+    setup_block.add_op(iterate_op)
 
-    select_op = dlt.SelectOp(arg_tensor, [], arg_tensor_dims, coord_indices)
-    set_op = dlt.SetOp(select_op.res, builtin.f32, val_load_op.dereferenced_value)
-    loop_block.add_ops([select_op, set_op])
-
-    # print_op = printf.PrintFormatOp("# Set " + ', '.join(["{}" for _ in coord_indices]) + " to {} ({}/{})", *coord_indices, val_load_op.dereferenced_value, nnz_idx_i64, ub)
-    # loop_block.add_op(print_op)
-
-    loop_block.add_op(scf.Yield())
-
-    loop_op = scf.For(lb, ub, step, [], loop_block)
-    setup_block.add_ops([loop_op, func.Return()])
+    setup_block.add_ops([func.Return()])
 
     np_ptr_type_val = NpArrayCtype((nnz,))
     np_ptr_type_dim_list = []

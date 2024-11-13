@@ -57,6 +57,7 @@ def handle_tensor(
             is_res,
             f"{name}_val",
             binary=True,
+            dtype=np.float32
         )
         assert ref_tensor.data.shape == (nnz,)
         return TensorWrapper(ref_tensor)

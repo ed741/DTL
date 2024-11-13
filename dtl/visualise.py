@@ -343,6 +343,12 @@ class LayoutPlotter:
             label += str(layout_node.buffer_scaler.data)
         else:
             assert False
+        label += ", "
+        label += "["
+        for index_buffer_type in layout_node.index_buffer_types:
+            label += _print_to_str(index_buffer_type)
+            label += ","
+        label += "]"
         label += ")"
         return {"label": _escape_text(label), "shape": "doubleoctagon"}, [(layout_node.child, "", "")]
 

@@ -1137,6 +1137,7 @@ class LibBuilder:
         llvm_only: bool = False,
         lib_path: str = None,
         clang_args: list[str] = None,
+        enable_debug: bool = False,
         load: bool = True,
         verbose=2,
     ) -> DTLCLib | None:
@@ -1154,6 +1155,7 @@ class LibBuilder:
             llvm_out=llvm_out,
             llvm_only=llvm_only,
             clang_args=clang_args,
+            enable_debug=enable_debug,
             verbose=verbose,
         )
         if llvm_only or not load:
@@ -1169,6 +1171,7 @@ class LibBuilder:
         lib_path: str = None,
         clang_args: list[str] = None,
         load: bool = True,
+        enable_debug: bool = False,
         verbose=2,
     ) -> DTLCLib | None:
         if dlt_func_map is None:
@@ -1180,7 +1183,7 @@ class LibBuilder:
         if verbose > 0:
             print(f"library name: {lib_path}")
         compilec.clang_compile(
-            llvm_path, lib_path, extra_clang_args=clang_args, verbose=verbose
+            llvm_path, lib_path, extra_clang_args=clang_args, verbose=verbose, enable_debug=enable_debug,
         )
         if load:
             function_types = {name.data: v for name, v in function_types.items()}

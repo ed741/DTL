@@ -29,6 +29,7 @@ def run_benchmark(
     print_updates: bool = False,
     inline_updates: bool = False,
     time_stamps: bool = False,
+    progress_reports: bool = False,
 ):
     chars = 0
     if print_updates:
@@ -47,6 +48,8 @@ def run_benchmark(
         benchmark_scopes.append(benchmark_scope)
     if print_updates and inline_updates:
         inline_print(i_chars, "")
+    if progress_reports:
+        print("~setup-done~")
 
     assert len(benchmark_scopes) == runs
 
@@ -60,6 +63,8 @@ def run_benchmark(
         else:
             print(f"#{time_stamp(time_stamps)} running benchmark")
     result = timeit(benchmark, number=1)
+    if progress_reports:
+        print("~benchmark-done~")
 
     if print_updates:
         if inline_updates:
@@ -99,6 +104,9 @@ def run_benchmark(
     if print_updates and inline_updates:
         inline_print(i_chars, "")
 
+    if progress_reports:
+        print("~testing-done~")
+
     if print_updates:
         if inline_updates:
             chars = inline_print(chars, "cleaning: ")
@@ -111,6 +119,9 @@ def run_benchmark(
         exec(clean_code, scope)
     if print_updates and inline_updates:
         inline_print(i_chars, "")
+
+    if progress_reports:
+        print("~tear-down-done~")
 
     if print_updates:
         if inline_updates:
@@ -158,6 +169,7 @@ if __name__ == "__main__":
     print_updates = False
     inline_updates = False
     time_stamps = False
+    progress_reports = False
 
     args = list(sys.argv[arg_idx:])
     while len(args) > 0:
@@ -207,6 +219,8 @@ if __name__ == "__main__":
                     inline_updates = True
                 elif f == "t":
                     time_stamps = True
+                elif f == "g":
+                    progress_reports = True
                 else:
                     raise ValueError(f"Unknown flag {f} in arg '{arg}' from {sys.argv}")
         else:
@@ -255,8 +269,12 @@ if __name__ == "__main__":
         print_updates=print_updates,
         inline_updates=inline_updates,
         time_stamps=time_stamps,
+        progress_reports=progress_reports,
     )
 
     print(result_time)
     for r in results:
         print(r)
+
+    if progress_reports:
+        print("~results-done~")

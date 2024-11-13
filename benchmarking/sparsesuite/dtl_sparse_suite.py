@@ -22,7 +22,7 @@ from benchmarking.sparsesuite.codes.spmspv_code import spmspv_single_code
 from benchmarking.sparsesuite.sparse_suite import TensorWrapper, handle_tensor
 from dtl import Index, RealVectorSpace, TensorVariable
 from dtl.libBuilder import LibBuilder, TupleStruct
-from xdsl.dialects import func
+from xdsl.dialects import builtin, func
 from xdsl.dialects.builtin import StringAttr
 from xdsl.dialects.experimental import dlt
 from xdsl.ir import Block
@@ -271,10 +271,10 @@ class SCircuit(SpMV):
         TupleStruct[TensorVariable], ReifyConfig]:
         return {
             a: ReifyConfig(
-                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([2]),separated_coo_buffer_options=frozenset([2]), dense=True, coo_minimum_dims=1, separated_coo_buffer_index_options=frozenset([builtin.i32])
             ),
             b: ReifyConfig(
-                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([2]),separated_coo_buffer_options=frozenset([2]), dense=True, coo_minimum_dims=1, separated_coo_buffer_index_options=frozenset([builtin.i32])
             ),
             c: ReifyConfig(dense=True, coo_minimum_dims=1),
         }
@@ -319,19 +319,27 @@ class Rajat21(SpMSpV):
         TupleStruct[TensorVariable], ReifyConfig]:
         return {
             a: ReifyConfig(
-                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([2]),separated_coo_buffer_options=frozenset([2]), dense=True, coo_minimum_dims=1, separated_coo_buffer_index_options=frozenset([builtin.i32])
             ),
             b: ReifyConfig(
-                unpacked_coo_buffer_options=frozenset([0]), dense=True, coo_minimum_dims=1
+                unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), dense=True, coo_minimum_dims=1, separated_coo_buffer_index_options=frozenset([builtin.i32])
             ),
             c: ReifyConfig(dense=True, coo_minimum_dims=1),
         }
 
     def skip_layout_func(self, l: PtrMapping) -> bool:
-        a_layout = l.make_ptr_dict()[StringAttr("R_0")]
-        if isinstance(a_layout.layout, dlt.DenseLayoutAttr):
-            if isinstance(a_layout.layout.child, dlt.DenseLayoutAttr):
-                return True
+        a_ptr = l.make_ptr_dict()[StringAttr("R_0")]
+        def l(layout: dlt.Layout):
+            return [layout] + [cc for c in layout.get_children() for cc in l(c)]
+        all_a_layouts = l(a_ptr.layout)
+        for l in all_a_layouts:
+            if isinstance(l, dlt.UnpackedCOOLayoutAttr|dlt.SeparatedCOOLayoutAttr):
+                coo_l = l
+                if isinstance(coo_l.child, dlt.DenseLayoutAttr):
+                    return True
+            if isinstance(l, dlt.DenseLayoutAttr):
+                if isinstance(l.child, dlt.DenseLayoutAttr):
+                    return True
         return False
 
     def skip_order_func(self, o: IterationMapping) -> bool:
@@ -355,7 +363,10 @@ if __name__ == "__main__":
             waste_of_time_threshold=0.1,
             test_too_short_threshold=0.001,
             long_run_multiplier=100,
+            setup_timeout=50.0,
             benchmark_timeout=5.0,
+            testing_timeout=5.0,
+            tear_down_timeout=5.0,
             benchmark_trial_child_process=True,
             benchmark_in_child_process=True,
         )
@@ -375,7 +386,10 @@ if __name__ == "__main__":
             waste_of_time_threshold=0.1,
             test_too_short_threshold=0.001,
             long_run_multiplier=100,
-            benchmark_timeout=50.0,
+            setup_timeout=140.0,
+            benchmark_timeout=5.0,
+            testing_timeout=50.0,
+            tear_down_timeout=50.0,
             benchmark_trial_child_process=True,
             benchmark_in_child_process=True,
         )

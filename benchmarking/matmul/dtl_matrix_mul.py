@@ -173,7 +173,17 @@ class Triple(MatMulDenseDTL[BasicDTLTest]):
     def get_configs_for_tensors(
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
-        return {(a, b, c): ReifyConfig()}
+        return {(a, b, c): ReifyConfig(
+            dense = True,
+            unpacked_coo_buffer_options = frozenset([]),
+            separated_coo_buffer_options = frozenset([]),
+            separated_coo_buffer_index_options = frozenset([]),
+            coo_minimum_dims = 2,
+            arith_replace = True,
+            force_arith_replace_immediate_use = True,
+            permute_structure_size_threshold = -1,
+            members_first = True,
+        )}
 
 
 class Pair(MatMulDenseDTL[BasicDTLTest]):
@@ -200,8 +210,28 @@ class Pair(MatMulDenseDTL[BasicDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            (a, b): ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
-            c: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
+            (a, b): ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([]),
+                separated_coo_buffer_options=frozenset([]),
+                separated_coo_buffer_index_options=frozenset([]),
+                coo_minimum_dims=2,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
+            c: ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([2]),
+                separated_coo_buffer_options=frozenset([2]),
+                separated_coo_buffer_index_options=frozenset([builtin.i32]),
+                coo_minimum_dims=1,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
         }
 
 
@@ -230,9 +260,39 @@ class Single(MatMulDenseDTL[BasicDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
-            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
-            c: ReifyConfig(),
+            a: ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([]),
+                separated_coo_buffer_options=frozenset([]),
+                separated_coo_buffer_index_options=frozenset([]),
+                coo_minimum_dims=2,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
+            b: ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([]),
+                separated_coo_buffer_options=frozenset([]),
+                separated_coo_buffer_index_options=frozenset([]),
+                coo_minimum_dims=2,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
+            c: ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([0, 2]),
+                separated_coo_buffer_options=frozenset([0, 2]),
+                separated_coo_buffer_index_options=frozenset([builtin.i32]),
+                coo_minimum_dims=1,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
         }
 
 
@@ -298,26 +358,49 @@ class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
         self, a: TensorVariable, b: TensorVariable, c: TensorVariable
     ) -> dict[TupleStruct[TensorVariable], ReifyConfig]:
         return {
-            a: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
-            b: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32])),
-            c: ReifyConfig(unpacked_coo_buffer_options=frozenset([2]), separated_coo_buffer_options=frozenset([2]), separated_coo_buffer_index_options=frozenset([builtin.i32]))
+            a: ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([2]),
+                separated_coo_buffer_options=frozenset([2]),
+                separated_coo_buffer_index_options=frozenset([builtin.i32, builtin.i64]),
+                coo_minimum_dims=1,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
+            b: ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([2]),
+                separated_coo_buffer_options=frozenset([2]),
+                separated_coo_buffer_index_options=frozenset([builtin.i32, builtin.i64]),
+                coo_minimum_dims=1,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
+            c: ReifyConfig(
+                dense=True,
+                unpacked_coo_buffer_options=frozenset([0, 2]),
+                separated_coo_buffer_options=frozenset([0, 2]),
+                separated_coo_buffer_index_options=frozenset([builtin.i32, builtin.i64]),
+                coo_minimum_dims=1,
+                arith_replace=True,
+                force_arith_replace_immediate_use=True,
+                permute_structure_size_threshold=-1,
+                members_first=True,
+            ),
         }
 
 
-class RowSparseSingles(RandomSparseSingle):
+class RowSparseSingle(RandomSparseSingle):
     def get_self_name(self) -> str:
         return super().get_self_name() + "_row"
 
-    def sparsify(self, np_a, np_b, r: Random) -> tuple[np.ndarray, np.ndarray]:
-        for i_i in range(np_a.shape[0]):
-            if r.random() < self.rate_a:
-                for i_j in range(np_a.shape[1]):
-                    np_a[i_i, i_j] = 0
-        for i_j in range(np_b.shape[0]):
-            if r.random() < self.rate_b:
-                for i_k in range(np_b.shape[1]):
-                    np_b[i_j, i_k] = 0
-        return np_a, np_b
+    def make_abc(self, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return make_random_sparse_np_arrays(seed, self.i, self.j, self.k, 1.0, 1.0, sparse_a=(self.rate_a, 1.0), sparse_b=(self.rate_b, 1.0))
+
 
 
 if __name__ == "__main__":
@@ -327,11 +410,13 @@ if __name__ == "__main__":
     benchmarks = []
 
     print(f"Args: {sys.argv}")
+    benchmark_names = [a for a in sys.argv[1:] if not a.startswith("-")]
+    run_all = len(benchmark_names) == 0
 
     settings_128 = BenchmarkSettings(
         runs=100,
         repeats=3,
-        waste_of_time_threshold=0.1,
+        waste_of_time_threshold=0.01,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
         setup_timeout=2.0,
@@ -341,28 +426,115 @@ if __name__ == "__main__":
         benchmark_trial_child_process=True,
     )
     settings_8 = BenchmarkSettings(
-        runs=10,
+        runs=100,
         repeats=3,
         waste_of_time_threshold=0.01,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
-        setup_timeout=2.0,
+        setup_timeout=1.0,
         benchmark_timeout=1.0,
-        testing_timeout=2.0,
-        tear_down_timeout=2.0,
+        testing_timeout=1.0,
+        tear_down_timeout=1.0,
         benchmark_trial_child_process=False,
     )
 
-    # if len(sys.argv) == 1 or "1" in sys.argv:
-    #     benchmarks.append(StaticTriple(128,128,128,True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    if len(sys.argv) == 1 or "2" in sys.argv:
+    if run_all or "triple128" in benchmark_names:
+        benchmarks.append(
+            Triple(
+                128,
+                128,
+                128,
+                False,
+                0,
+                "./results",
+                3,
+                _Epsilon,
+                settings_128
+            )
+        )
 
+    if run_all or "pair128" in benchmark_names:
         benchmarks.append(
             Pair(
                 128,
                 128,
                 128,
-                True,
+                False,
+                0,
+                "./results",
+                3,
+                _Epsilon,
+                settings_128
+            )
+        )
+
+    if run_all or "single128" in benchmark_names:
+        benchmarks.append(
+            Single(
+                128,
+                128,
+                128,
+                False,
+                0,
+                "./results",
+                3,
+                _Epsilon,
+                settings_128
+            )
+        )
+
+    if run_all or "triple8" in benchmark_names:
+        benchmarks.append(
+            Triple(
+                8,
+                8,
+                8,
+                False,
+                0,
+                "./results",
+                3,
+                _Epsilon,
+                settings_8
+            )
+        )
+
+    if run_all or "pair8" in benchmark_names:
+        benchmarks.append(
+            Pair(
+                8,
+                8,
+                8,
+                False,
+                0,
+                "./results",
+                3,
+                _Epsilon,
+                settings_8
+            )
+        )
+
+    if run_all or "single8" in benchmark_names:
+        benchmarks.append(
+            Single(
+                8,
+                8,
+                8,
+                False,
+                0,
+                "./results",
+                3,
+                _Epsilon,
+                settings_8
+            )
+        )
+
+    if run_all or "pair128-O5" in benchmark_names:
+        benchmarks.append(
+            Pair(
+                128,
+                128,
+                128,
+                False,
                 0,
                 "./results",
                 5,
@@ -370,127 +542,22 @@ if __name__ == "__main__":
                 settings_128
             )
         )
-    if len(sys.argv) == 1 or "3" in sys.argv:
-        benchmarks.append(
-            Single(
-                128,
-                128,
-                128,
-                True,
-                0,
-                "./results",
-                3,
-                _Epsilon,
-                settings_128
-            )
-        )
-    # if len(sys.argv) == 1 or "4" in sys.argv:
-    #     benchmarks.append(StaticTriple(8, 8, 8, True, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    if len(sys.argv) == 1 or "5" in sys.argv:
-        benchmarks.append(
-            Pair(
-                8,
-                8,
-                8,
-                True,
-                0,
-                "./results",
-                3,
-                _Epsilon,
-                settings_8
-            )
-        )
-    if len(sys.argv) == 1 or "6" in sys.argv:
-        benchmarks.append(
-            Single(
-                8,
-                8,
-                8,
-                True,
-                0,
-                "./results",
-                3,
-                _Epsilon,
-                settings_8
-            )
-        )
-
-    # if len(sys.argv) == 1 or "7" in sys.argv:
-    #     benchmarks.append(StaticTriple(128, 128, 128, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    if len(sys.argv) == 1 or "8" in sys.argv:
-        benchmarks.append(
-            Pair(
-                128,
-                128,
-                128,
-                False,
-                0,
-                "./results",
-                3,
-                _Epsilon,
-                settings_128
-            )
-        )
-    if len(sys.argv) == 1 or "9" in sys.argv:
-        benchmarks.append(
-            Single(
-                128,
-                128,
-                128,
-                False,
-                0,
-                "./results",
-                3,
-                _Epsilon,
-                settings_128
-            )
-        )
-    # if len(sys.argv) == 1 or "10" in sys.argv:
-    #     benchmarks.append(StaticTriple(8, 8, 8, False, 0, "./results", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
-    if len(sys.argv) == 1 or "11" in sys.argv:
-        benchmarks.append(
-            Pair(
-                8,
-                8,
-                8,
-                False,
-                0,
-                "./results",
-                3,
-                _Epsilon,
-                settings_8
-            )
-        )
-    if len(sys.argv) == 1 or "12" in sys.argv:
-        benchmarks.append(
-            Single(
-                8,
-                8,
-                8,
-                False,
-                0,
-                "./results",
-                3,
-                _Epsilon,
-                settings_8
-            )
-        )
 
     settings_sparse = BenchmarkSettings(
         runs=10,
         repeats=3,
-        waste_of_time_threshold=0.1,
+        waste_of_time_threshold=0.01,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
-        setup_timeout=2.0,
-        benchmark_timeout=3.0,
+        setup_timeout=3.0,
+        benchmark_timeout=2.0,
         testing_timeout=2.0,
         tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
     )
 
     for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
-        if len(sys.argv) == 1 or f"13-{rate}" in sys.argv:
+        if len(sys.argv) == 1 or f"sparse1024-{rate}" in sys.argv:
             benchmarks.append(
                 RandomSparseSingle(
                     1024,
@@ -507,8 +574,23 @@ if __name__ == "__main__":
                 )
             )
 
-    # benchmarks.append(
-    #     RandomSparseSingles(1024, 1024, 1024, False, 0, 1, 1,"./results", "", repeats=repeats, runs=runs, opt_level=3, epsilon=_Epsilon))
+    for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
+        if len(sys.argv) == 1 or f"sparse-row1024-{rate}" in sys.argv:
+            benchmarks.append(
+                RowSparseSingle(
+                    1024,
+                    1024,
+                    1024,
+                    False,
+                    0,
+                    "./results",
+                    3,
+                    _Epsilon,
+                    rate_a = float(rate),
+                    rate_b = float(rate),
+                    settings=settings_sparse
+                )
+            )
 
     benchmark_options = [a for a in sys.argv if a.startswith("-")]
     for benchmark in benchmarks:

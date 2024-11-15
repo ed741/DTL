@@ -340,6 +340,13 @@ class RandomSparseSingle(MatMulDenseTaco[MatMulSparseTacoTest]):
         function_types = {StringAttr(n): f for n, f in function_types.items()}
         return function_types, function_type_descriptor
 
+class RowSparseSingle(RandomSparseSingle):
+    def get_self_name(self) -> str:
+        return super().get_self_name() + "_row"
+
+    def make_abc(self, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return make_random_sparse_np_arrays(seed, self.i, self.j, self.k, 1.0, 1.0, sparse_a=(self.rate_a, 1.0), sparse_b=(self.rate_b, 1.0))
+
 
 if __name__ == "__main__":
 
@@ -348,46 +355,64 @@ if __name__ == "__main__":
     benchmarks = []
 
     print(f"Args: {sys.argv}")
+    benchmark_names = [a for a in sys.argv[1:] if not a.startswith("-")]
+    run_all = len(benchmark_names) == 0
 
     settings_128 = BenchmarkSettings(
-        runs=10,
-        repeats=3,
-        waste_of_time_threshold=0.1,
-        test_too_short_threshold=0.001,
-        long_run_multiplier=100,
-        benchmark_timeout=3.0,
-        benchmark_trial_child_process=True,
-    )
-    settings_8 = BenchmarkSettings(
-        runs=10,
+        runs=100,
         repeats=3,
         waste_of_time_threshold=0.01,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
-        benchmark_timeout=3.0,
+        setup_timeout=2.0,
+        benchmark_timeout=1.0,
+        testing_timeout=2.0,
+        tear_down_timeout=2.0,
+        benchmark_trial_child_process=True,
+    )
+    settings_8 = BenchmarkSettings(
+        runs=100,
+        repeats=3,
+        waste_of_time_threshold=0.01,
+        test_too_short_threshold=0.001,
+        long_run_multiplier=100,
+        setup_timeout=1.0,
+        benchmark_timeout=1.0,
+        testing_timeout=1.0,
+        tear_down_timeout=1.0,
         benchmark_trial_child_process=False,
     )
     base_directory = "./results"
-    if len(sys.argv) == 1 or "1" in sys.argv:
+    if run_all or "single128" in benchmark_names:
         benchmarks.append(
             Single(128, 128, 128, 0, base_directory, 3, _Epsilon, settings_128)
         )
-    if len(sys.argv) == 1 or "2" in sys.argv:
+    if run_all or "single8" in benchmark_names:
         benchmarks.append(Single(8, 8, 8, 0, base_directory, 3, _Epsilon, settings_128))
 
     settings_sparse = BenchmarkSettings(
         runs=10,
         repeats=3,
-        waste_of_time_threshold=0.1,
+        waste_of_time_threshold=0.01,
         test_too_short_threshold=0.001,
         long_run_multiplier=100,
-        benchmark_timeout=3.0,
+        setup_timeout=3.0,
+        benchmark_timeout=2.0,
+        testing_timeout=2.0,
+        tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
     )
     for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
-        if len(sys.argv) == 1 or f"3-{rate}" in sys.argv:
+        if run_all or f"sparse1024-{rate}" in benchmark_names:
             benchmarks.append(
-                RandomSparseSingle(
+                RowSparseSingle(
+                    1024, 1024, 1024, 0, float(rate), float(rate), base_directory, 3, _Epsilon, settings_128
+                )
+            )
+    for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
+        if run_all or f"sparse-row1024-{rate}" in benchmark_names:
+            benchmarks.append(
+                RowSparseSingle(
                     1024, 1024, 1024, 0, float(rate), float(rate), base_directory, 3, _Epsilon, settings_128
                 )
             )

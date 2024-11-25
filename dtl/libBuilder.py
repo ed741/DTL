@@ -1113,7 +1113,7 @@ class LibBuilder:
                 [
                     lower_dlt_to_.DLTScopeRewriter(),
                     lower_dlt_to_.DLTPtrTypeRewriter(recursive=True),
-                    lower_dlt_to_.DLTIndexTypeRewriter(recursive=True),
+                    # lower_dlt_to_.DLTIndexTypeRewriter(recursive=True),
                     lower_dlt_to_.DLTIndexRangeTypeRewriter(recursive=True),
                 ]
             )

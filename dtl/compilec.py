@@ -48,6 +48,9 @@ def mlir_compile(
     if verbose > 1:
         print("mlir-opt:")
     passes = [
+        # "--affine-loop-invariant-code-motion",
+        # "--affine-loop-unroll= unroll-factor=8 unroll-full-threshold=256 unroll-up-to-factor",
+        "--lower-affine",
         "--convert-math-to-funcs",
         "--convert-scf-to-cf",
         "--convert-cf-to-llvm",

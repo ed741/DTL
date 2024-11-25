@@ -585,10 +585,10 @@ def make_setup_func_dense(
             ops = []
             i64_indices = []
             for index in indices:
-                index_cast_op = builtin.UnrealizedConversionCastOp.get(
-                    [index], [builtin.i64]
+                index_cast_op = arith.IndexCastOp(
+                    index, builtin.i64
                 )
-                i64_indices.append(index_cast_op.outputs[0])
+                i64_indices.append(index_cast_op.result)
                 ops.append(index_cast_op)
             llvm_ptr_type = builtin.f32
             for dim in reversed(dims):
@@ -681,11 +681,9 @@ def make_check_func_coo(
         arg_types=[IndexType(), IntegerType(1), builtin.f32, IntegerType(1)]
     )
     nnz_index, correct_arg, total_error_arg, consistent_arg = loop_block.args
-    nnz_index_cast_op = builtin.UnrealizedConversionCastOp.get(
-        [nnz_index], [builtin.i64]
-    )
+    nnz_index_cast_op = arith.IndexCastOp(nnz_index, builtin.i64)
     loop_block.add_op(nnz_index_cast_op)
-    nnz_idx_i64 = nnz_index_cast_op.outputs[0]
+    nnz_idx_i64 = nnz_index_cast_op.result
 
     coord_indices = []
     coord_i64_indices = []
@@ -698,12 +696,12 @@ def make_check_func_coo(
         )
         load_op = llvm.LoadOp(ptr_op.result, builtin.i32)
         coord_i64_op = arith.ExtUIOp(load_op.dereferenced_value, builtin.i64)
-        coord_index_op = builtin.UnrealizedConversionCastOp.get(
-            [coord_i64_op.result], [IndexType()]
+        coord_index_op = arith.IndexCastOp(
+            coord_i64_op.result, IndexType()
         )
         loop_block.add_ops([ptr_op, load_op, coord_i64_op, coord_index_op])
         coord_i64_indices.append(coord_i64_op.result)
-        coord_indices.append(coord_index_op.outputs[0])
+        coord_indices.append(coord_index_op.result)
 
     val_ptr_arith_op = llvm.GEPOp(
         arg_np_ptr_val,
@@ -854,10 +852,8 @@ def make_check_func_dense(
             ops.extend([false_op, f_epsilon_op])
             i64_indices = []
             for index in indices:
-                index_cast_op = builtin.UnrealizedConversionCastOp.get(
-                    [index], [builtin.i64]
-                )
-                i64_indices.append(index_cast_op.outputs[0])
+                index_cast_op = arith.IndexCastOp(index, builtin.i64)
+                i64_indices.append(index_cast_op.result)
                 ops.append(index_cast_op)
             llvm_ptr_type = builtin.f32
             for dim in reversed(dims):

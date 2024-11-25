@@ -6,10 +6,12 @@ import tempfile
 import typing
 from ctypes import cdll
 from dataclasses import dataclass
+from io import StringIO
 
 import numpy as np
 
 import dtl
+from docs.Toy.toy.tests.test_add_sections import output_module
 from dtl import (
     VectorSpaceVariable,
     UnknownSizeVectorSpace,
@@ -27,6 +29,7 @@ from xdsl.dialects.experimental import dlt
 from xdsl.dialects.func import Return, FuncOp
 from xdsl.ir import Attribute, Block, Region, MLContext, TypeAttribute
 from xdsl.pattern_rewriter import PatternRewriteWalker, GreedyRewritePatternApplier
+from xdsl.printer import Printer
 from xdsl.transforms.dead_code_elimination import RemoveUnusedOperations
 from xdsl.transforms.experimental.dlt import lower_dlt_to_
 from xdsl.transforms.experimental.convert_return_to_pointer_arg import (
@@ -995,6 +998,7 @@ class LibBuilder:
         iteration_map: IterationMap,
         new_order_map: dict[dlt.IterIdent, dlt.IterationOrder],
         graph_dir: str = None,
+        output_dlt_path: str = None,
         verbose=2,
     ) -> tuple[dict[StringAttr, FunctionType], dict[str, FuncTypeDescriptor]]:
         if verbose > 0:
@@ -1067,6 +1071,15 @@ class LibBuilder:
         if verbose > 1:
             print(module)
 
+        if output_dlt_path is not None:
+            xdsl_module = StringIO()
+            printer = Printer(print_generic_format=False, stream=xdsl_module)
+            printer.print(module)
+            if verbose > 1:
+                print(f"Making dlt - IR file: {output_dlt_path}")
+            with open(output_dlt_path, 'wb') as xdsl_tmp:
+                xdsl_tmp.write(xdsl_module.getvalue().encode('utf8'))
+
         # DLT -> MLIR builtin
         dlt_to_llvm_applier = PatternRewriteWalker(
             GreedyRewritePatternApplier(
@@ -1138,6 +1151,8 @@ class LibBuilder:
         lib_path: str = None,
         clang_args: list[str] = None,
         enable_debug: bool = False,
+        output_xdsl: bool = False,
+        output_mlir: bool = False,
         load: bool = True,
         verbose=2,
     ) -> DTLCLib | None:
@@ -1156,6 +1171,8 @@ class LibBuilder:
             llvm_only=llvm_only,
             clang_args=clang_args,
             enable_debug=enable_debug,
+            output_xdsl=output_xdsl,
+            output_mlir=output_mlir,
             verbose=verbose,
         )
         if llvm_only or not load:

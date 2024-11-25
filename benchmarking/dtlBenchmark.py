@@ -160,6 +160,9 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         options["do-not-lower"] = "--do-not-lower" in benchmark_options
         options["do-not-generate"] = "--do-not-generate" in benchmark_options
         options["llvm-debug"] = "--llvm-debug" in benchmark_options
+        options["output-dlt"] = "--output-dlt" in benchmark_options
+        options["output-xdsl"] = "--output-xdsl" in benchmark_options
+        options["output-mlir"] = "--output-mlir" in benchmark_options
 
         only_layouts = set()
         only_orders = set()
@@ -362,6 +365,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                 iteration_map,
                 new_order.make_iter_dict(),
                 graph_dir=graph_path,
+                output_dlt_path=f"{lib_path}.dlt.ir" if options["output-dlt"] else None,
                 verbose=0,
             )
             with open(func_types_path, "wb") as f:
@@ -419,6 +423,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                         iteration_map,
                         new_order.make_iter_dict(),
                         graph_dir=graph_path,
+                        output_dlt_path=f"{lib_path}.dlt.ir" if options["output-dlt"] else None,
                         verbose=0,
                     )
                     with open(func_types_path, "wb") as f:
@@ -436,6 +441,8 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                     clang_args=self.get_extra_clang_args(options),
                     load=load,
                     enable_debug=options["llvm-debug"],
+                    output_xdsl=options["output-xdsl"],
+                    output_mlir=options["output-mlir"],
                     verbose=0,
                 )
                 if options["only-to-llvm"]:

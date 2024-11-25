@@ -14,6 +14,8 @@ def mlir_compile(
     llvm_only: bool = False,
     clang_args: list[str] = None,
     enable_debug: bool = False,
+    output_xdsl: bool = False,
+    output_mlir: bool = False,
     verbose: int =2,
 ):
     # if header_out==None:
@@ -36,11 +38,12 @@ def mlir_compile(
     if verbose > 1:
         print(xdsl_module.getvalue())
 
-    if verbose > 3:
-        mlir_tmp_fd, mlir_tmp_path = tempfile.mkstemp()
-        print(f"Making tmp mlir - IR file: {mlir_tmp_path}")
-        with os.fdopen(mlir_tmp_fd, 'wb') as mlir_tmp:
-            mlir_tmp.write(xdsl_module.getvalue().encode('utf8'))
+    if output_xdsl:
+        xdsl_path = f"{lib_output}.xdsl.ir"
+        if verbose > 1:
+            print(f"Making xdsl - IR file: {xdsl_path}")
+        with open(xdsl_path, 'wb') as xdsl_tmp:
+            xdsl_tmp.write(xdsl_module.getvalue().encode('utf8'))
 
     if verbose > 1:
         print("mlir-opt:")
@@ -70,6 +73,13 @@ def mlir_compile(
         print(mlir_opt_out.decode("utf8"))
         print("stderr:")
         print(err.decode("utf8") if err is not None else None)
+
+    if output_mlir:
+        mlir_path = f"{lib_output}.mlir.ir"
+        if verbose > 1:
+            print(f"Making mlir - IR file: {mlir_path}")
+        with open(mlir_path, 'wb') as mlir_tmp:
+            mlir_tmp.write(mlir_opt_out)
 
     if verbose > 1:
         print("mlir-translate")

@@ -17,6 +17,7 @@ extern "C" void init_A(Tensor<float>** r_a, Tensor<float>** a) {
     Tensor<float>* n = new Tensor<float>("A", {I,J}, f_a);
     *r_a = n;
     *a = n;
+    n->pack();
 }
 
 extern "C" void dealloc_A(Tensor<float>** r_a_ptr) {
@@ -31,6 +32,7 @@ extern "C" void init_B(Tensor<float>** r_b, Tensor<float>** b) {
     Tensor<float>* n = new Tensor<float>("B", {J,K}, f_b);
     *r_b = n;
     *b = n;
+    n->pack();
 }
 
 extern "C" void dealloc_B(Tensor<float>** r_b_ptr) {
@@ -45,6 +47,7 @@ extern "C" void init_C(Tensor<float>** r_c, Tensor<float>** c) {
     Tensor<float>* n = new Tensor<float>("C", {I,K}, f_c);
     *r_c = n;
     *c = n;
+    n->pack();
 }
 
 extern "C" void dealloc_C(Tensor<float>** r_c_ptr) {
@@ -84,14 +87,14 @@ extern "C" void prepare(Tensor<float>** a_ptr, Tensor<float>** b_ptr, Tensor<flo
     c(i,k) = a(i,j) * b(j,k);
     c.compile();
 //    c.assemble();
-    auto code = c.getSource();
-    //Using stringstreams
-	std::istringstream iss(code);
-	std::string line;
-	int idx = 0;
-	while(std::getline(iss, line)) {
-		std::cout << "# " << idx++ << ": " << line << std::endl;
-	}
+//    auto code = c.getSource();
+//    //Using stringstreams
+//	std::istringstream iss(code);
+//	std::string line;
+//	int idx = 0;
+//	while(std::getline(iss, line)) {
+//		std::cout << "# " << idx++ << ": " << line << std::endl;
+//	}
 }
 
 extern "C" void matmul(Tensor<float>** c_ptr, Tensor<float>** a_ptr, Tensor<float>** b_ptr) {
@@ -109,14 +112,17 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
     float total_error = 0;
     bool total_consistent = 1;
 
+    bool checked[I*K];
+
     auto value_f = c_f.begin();
     for(auto value = c.begin(); value != c.end(); ++value) {
         auto coord = value->first;
         float c_v = value->second;
-//        std::cout << "coord: " << coord << " val: " << c_v << std::endl;
+//        std::cout << "# coord: " << coord << " val: " << c_v << std::endl;
         int i = coord[0];
         int k = coord[1];
-//        std::cout << "i: " << i << " k: " << k << std::endl;
+//        std::cout << "# i: " << i << " k: " << k << std::endl;
+        checked[K*i + k] = 1;
 
         float ref = vals[K*i + k];
         float error = (c_v - ref);
@@ -124,12 +130,15 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
         float base_epsilon = E;
         float epsilon = base_epsilon * (ref > -ref? ref : -ref);
         bool correct = epsilon >= error;
-
+        if (!correct) {
+            std::cout << "# result incorrect! at i: " << i << ", k: " << k << " :: result: " << c_v << " ref: " << ref << std::endl;
+//            std::cout << std::format("# result incorrect! at i: {}, k: {} :: result: {}, ref: {}\n", i, k, c_v, ref);
+        }
         bool coord_check = value->first == value_f->first;
         float c_f_v = value_f->second;
         if (!coord_check) {
-                std::cout << "coord mismatch!" << std::endl;
-                std::cout << "coord: " << coord << " f coord: " << value_f->first << std::endl;
+                std::cout << "# coord mismatch!" << std::endl;
+//                std::cout << std::format("# coord mismatch!: {},  f coord: {}\n", coord, value_f->first);
         }
         bool consistent = c_f_v == c_v;
         consistent &= coord_check;
@@ -139,6 +148,22 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
         total_consistent &= consistent;
         ++value_f;
     }
+
+    bool all_check = true;
+    for(int i = 0; i < I; i++){
+        for(int k = 0; k < K; k++){
+            float ref = vals[K*i + k];
+            if (ref != 0.0f) {
+                bool c = checked[K*i + k];
+                if (!c) {
+                    std::cout << "# result at i: " << i << ", k: " << k << " is " << ref << " but was not iterated in C. " << std::endl;
+//                    std::cout << std::format("# result at i: {}, k: {} is {} but was not iterated in C. \n", i, k, ref);
+                }
+                all_check &= c;
+            }
+        }
+    }
+    total_correct &= all_check;
 
 //    for(int i = 0; i < I; i++){
 //        for(int k = 0; k < K; k++){

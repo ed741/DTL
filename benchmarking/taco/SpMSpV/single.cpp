@@ -145,14 +145,18 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
         float base_epsilon = E;
         float epsilon = base_epsilon * (ref_v > -ref_v? ref_v : -ref_v);
         bool correct = epsilon >= error;
+        if (!correct) {
+            std::cout << "# result incorrect! at ref_i: " << ref_i << ", c_i: " << c_i << " :: result: " << c_v << " ref: " << ref_v << std::endl;
+//            std::cout << std::format("# result incorrect! at i: {} :: result: {}, ref: {}\n", i, c_v, ref);
+        }
 
 //        std::cout << "# check_consistent: " << check_consistent << std::endl;
         if (check_consistent){
             bool coord_check = coord == value_f->first;
             float c_f_v = value_f->second;
             if (!coord_check) {
-                    std::cout << "# coord mismatch!" << std::endl;
-                    std::cout << "# coord: " << coord << " f coord: " << value_f->first << std::endl;
+//                    std::cout << "# coord mismatch!" << std::endl;
+                    std::cout << "# coord missmatch! : " << coord << " != " << value_f->first << std::endl;
             }
             bool consistent = c_f_v == c_v;
             consistent &= coord_check;

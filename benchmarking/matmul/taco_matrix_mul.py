@@ -362,25 +362,27 @@ if __name__ == "__main__":
         runs=100,
         repeats=3,
         waste_of_time_threshold=0.01,
-        test_too_short_threshold=0.001,
-        long_run_multiplier=100,
+        test_too_short_threshold=0.0005,
+        long_run_multiplier=10,
         setup_timeout=2.0,
         benchmark_timeout=1.0,
         testing_timeout=2.0,
         tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
+        benchmark_in_child_process=True,
     )
     settings_8 = BenchmarkSettings(
         runs=100,
         repeats=3,
         waste_of_time_threshold=0.01,
-        test_too_short_threshold=0.001,
-        long_run_multiplier=100,
+        test_too_short_threshold=0.0005,
+        long_run_multiplier=10,
         setup_timeout=1.0,
         benchmark_timeout=1.0,
         testing_timeout=1.0,
         tear_down_timeout=1.0,
-        benchmark_trial_child_process=False,
+        benchmark_trial_child_process=True,
+        benchmark_in_child_process=True,
     )
     base_directory = "./results"
     if run_all or "single128" in benchmark_names:
@@ -394,13 +396,14 @@ if __name__ == "__main__":
         runs=10,
         repeats=3,
         waste_of_time_threshold=0.01,
-        test_too_short_threshold=0.001,
-        long_run_multiplier=100,
+        test_too_short_threshold=0.0005,
+        long_run_multiplier=10,
         setup_timeout=3.0,
         benchmark_timeout=2.0,
         testing_timeout=2.0,
         tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
+        benchmark_in_child_process=True,
     )
     for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:
         if run_all or f"sparse1024-{rate}" in benchmark_names:

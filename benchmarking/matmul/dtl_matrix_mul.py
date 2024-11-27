@@ -1,5 +1,4 @@
 import sys
-from random import Random
 from typing import Generic
 
 import numpy as np
@@ -15,6 +14,8 @@ from dtl.libBuilder import LibBuilder, StructType, TupleStruct
 from benchmarking.dtlBenchmark import DLTCompileContext, DTLBenchmark, T_DTL, make_check_func_dense, \
     make_setup_func_dense
 from xdsl.dialects import builtin, func
+from xdsl.dialects.experimental import dlt
+from xdsl.dialects.experimental.dlt import Layout
 from xdsl.ir import Block
 from xdsl.transforms.experimental.dlt.generate_dlt_iteration_orders import (
     IterationMapping,
@@ -56,6 +57,8 @@ class MatMulDenseDTL(DTLBenchmark[T_DTL], abc.ABC, Generic[T_DTL]):
             f"{new_base_dir}/orders",
             settings,
             opt_num,
+            skip_layout_func=self.skip_layout_func,
+            skip_order_func=self.skip_order_func,
         )
 
         np_a, np_b, np_c = self.make_abc(seed)
@@ -77,6 +80,47 @@ class MatMulDenseDTL(DTLBenchmark[T_DTL], abc.ABC, Generic[T_DTL]):
 
     @abc.abstractmethod
     def get_self_name(self) -> str:
+        raise NotImplementedError
+
+    def skip_layout_func(self, layout: PtrMapping) -> bool:
+        return False
+
+    def skip_order_func(self, order: IterationMapping) -> bool:
+        return False
+
+    def skip_layout_order_func(self, layout_mapping: PtrMapping, order_mapping: IterationMapping, context: DLTCompileContext) -> bool:
+        layouts = layout_mapping.make_ptr_dict()
+        def f(l: Layout) -> list[Layout]:
+            return [l] + [c for cl in l.get_children() for c in f(cl)]
+        for iter_name, order in order_mapping.make_iter_dict().items():
+            iter_op = context.iteration_map.iteration_ops[iter_name]
+            for i in range(len(iter_op.tensors)):
+                sparse_dims = order.non_zero_loop_for(i, iter_op)
+                if len(sparse_dims) > 0:
+                    tensor_type = typing.cast(dlt.PtrType, iter_op.tensors[i].type)
+                    assert isinstance(tensor_type, dlt.PtrType)
+                    ptr_type = layouts[tensor_type.identification]
+                    layout = ptr_type.layout
+                    nodes = f(layout)
+                    sparse_nodes = [n for n in nodes if isinstance(n, dlt.SeparatedCOOLayoutAttr | dlt.UnpackedCOOLayoutAttr)]
+                    sparse_stored = {d for n in sparse_nodes for d in n.dimensions}
+                    if len(sparse_dims & sparse_stored) == 0:
+                        return True
+                    # if not any(isinstance(l, dlt.IndexingLayoutAttr) for l in nodes):
+                    #     return True
+        return False
+
+    def make_tests_for(
+        self, context: DLTCompileContext, layout: PtrMapping, order: IterationMapping
+    ) -> list[T_DTL]:
+        if self.skip_layout_order_func(layout, order, context):
+            return []
+        return self.make_test_for(context, layout, order)
+
+    @abc.abstractmethod
+    def make_test_for(
+        self, context: DLTCompileContext, layout: PtrMapping, order: IterationMapping
+    ) -> list[T_DTL]:
         raise NotImplementedError
 
     def test_data_variant_name(self) -> str:
@@ -156,7 +200,7 @@ class Triple(MatMulDenseDTL[BasicDTLTest]):
     def get_self_name(self) -> str:
         return "triple"
 
-    def make_tests_for(
+    def make_test_for(
         self, context: DLTCompileContext, layout: PtrMapping, order: IterationMapping
     ) -> list[BasicDTLTest]:
         return [BasicDTLTest(matmul_triple_code, context, layout, order)]
@@ -191,7 +235,7 @@ class Pair(MatMulDenseDTL[BasicDTLTest]):
     def get_self_name(self) -> str:
         return "pair"
 
-    def make_tests_for(
+    def make_test_for(
         self, context: DLTCompileContext, layout: PtrMapping, order: IterationMapping
     ) -> list[BasicDTLTest]:
         return [BasicDTLTest(matmul_pair_code, context, layout, order)]
@@ -240,7 +284,7 @@ class Single(MatMulDenseDTL[BasicDTLTest]):
     def get_self_name(self) -> str:
         return "single"
 
-    def make_tests_for(
+    def make_test_for(
         self, context: DLTCompileContext, layout: PtrMapping, order: IterationMapping
     ) -> list[BasicDTLTest]:
         return [BasicDTLTest(matmul_single_code, context, layout, order)]
@@ -334,7 +378,7 @@ class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
     def test_data_variant_name(self) -> str:
         return super().test_data_variant_name() + f"_{self.rate_a}_{self.rate_b}"
 
-    def make_tests_for(
+    def make_test_for(
         self, context: DLTCompileContext, layout: PtrMapping, order: IterationMapping
     ) -> list[MatMulSparseDTLTest]:
         return [
@@ -417,25 +461,27 @@ if __name__ == "__main__":
         runs=100,
         repeats=3,
         waste_of_time_threshold=0.01,
-        test_too_short_threshold=0.001,
-        long_run_multiplier=100,
+        test_too_short_threshold=0.0005,
+        long_run_multiplier=10,
         setup_timeout=2.0,
         benchmark_timeout=1.0,
         testing_timeout=2.0,
         tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
+        benchmark_in_child_process=True,
     )
     settings_8 = BenchmarkSettings(
         runs=100,
         repeats=3,
         waste_of_time_threshold=0.01,
-        test_too_short_threshold=0.001,
-        long_run_multiplier=100,
+        test_too_short_threshold=0.0005,
+        long_run_multiplier=10,
         setup_timeout=1.0,
         benchmark_timeout=1.0,
         testing_timeout=1.0,
         tear_down_timeout=1.0,
-        benchmark_trial_child_process=False,
+        benchmark_trial_child_process=True,
+        benchmark_in_child_process=True,
     )
 
     if run_all or "triple128" in benchmark_names:
@@ -547,13 +593,14 @@ if __name__ == "__main__":
         runs=10,
         repeats=3,
         waste_of_time_threshold=0.01,
-        test_too_short_threshold=0.001,
-        long_run_multiplier=100,
+        test_too_short_threshold=0.0005,
+        long_run_multiplier=10,
         setup_timeout=3.0,
         benchmark_timeout=2.0,
         testing_timeout=2.0,
         tear_down_timeout=2.0,
         benchmark_trial_child_process=True,
+        benchmark_in_child_process=True,
     )
 
     for rate in ["0.1", "0.01", "0.001", "0.0001", "0.00001"]:

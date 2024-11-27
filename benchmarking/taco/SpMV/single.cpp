@@ -109,6 +109,8 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
     float total_error = 0;
     bool total_consistent = 1;
 
+    bool checked[I];
+
     auto value_f = c_f.begin();
     for(auto value = c.begin(); value != c.end(); ++value) {
         auto coord = value->first;
@@ -116,6 +118,7 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
 //        std::cout << "coord: " << coord << " val: " << c_v << std::endl;
         int i = coord[0];
 //        std::cout << "i: " << i << std::endl;
+        checked[i] = 1;
 
         float ref = vals[i];
         float error = (c_v - ref);
@@ -123,12 +126,15 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
         float base_epsilon = E;
         float epsilon = base_epsilon * (ref > -ref? ref : -ref);
         bool correct = epsilon >= error;
-
+        if (!correct) {
+            std::cout << "# result incorrect! at i: " << i << " :: result: " << c_v << " ref: " << ref << std::endl;
+//            std::cout << std::format("# result incorrect! at i: {} :: result: {}, ref: {}\n", i, c_v, ref);
+        }
         bool coord_check = value->first == value_f->first;
         float c_f_v = value_f->second;
         if (!coord_check) {
-                std::cout << "coord mismatch!" << std::endl;
-                std::cout << "coord: " << coord << " f coord: " << value_f->first << std::endl;
+                std::cout << "# coord mismatch!: "<<value->first<<" != " << value_f->first << std::endl;
+//                std::cout << "coord: " << coord << " f coord: " << value_f->first << std::endl;
         }
         bool consistent = c_f_v == c_v;
         consistent &= coord_check;
@@ -138,6 +144,21 @@ extern "C" void check_C(uint64_t* correct_ret, float* total_error_ret, uint64_t*
         total_consistent &= consistent;
         ++value_f;
     }
+
+        bool all_check = true;
+    for(int i = 0; i < I; i++){
+        float ref = vals[i];
+        if (ref != 0.0f) {
+            bool c = checked[i];
+            if (!c) {
+                std::cout << "# result at i: " << i << " is " << ref << " but was not iterated in C. " << std::endl;
+//                std::cout << std::format("# result at i: {}, k: {} is {} but was not iterated in C. \n", i, k, ref);
+            }
+            all_check &= c;
+        }
+    }
+    total_correct &= all_check;
+
     *correct_ret = (uint64_t) total_correct;
     *total_error_ret = total_error;
     *consistent_ret = (uint64_t) total_consistent;

@@ -447,100 +447,10 @@ class Benchmark(abc.ABC, Generic[T, L]):
 
             busy_wait_time = 1.0
             out = []
+            mid_line = ""
             info_strings = []
 
             max_ram_usage = 0
-
-            # setup_done = False
-            # section_start = time.time()
-            # wait_time = self.settings.setup_timeout*runs
-            # if process_live:
-            #     count = self.inline_log(count, "benchmark process: setup, ")
-            #     loop_count = self.inline_log(0,"")
-            #     while process_live and not setup_done:
-            #         loop_count = self.inline_log(loop_count, ".", append=True)
-            #         ram_usage = psutil.virtual_memory()[2]/100.0
-            #         max_ram_usage = max(max_ram_usage, ram_usage)
-            #         if ram_usage > self.settings.ram_use_cap:
-            #             loop_count = self.inline_log(loop_count, "")
-            #             count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage*100.0)}, ")
-            #             info_strings.append(f"Aborting due to Ram usage reaching {ram_usage*100.0}%")
-            #         try:
-            #             exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
-            #             process_live = False
-            #         except subprocess.TimeoutExpired as _:
-            #             pass
-            #         current_output = read_stdout.read()
-            #         current_lines = current_output.splitlines()
-            #         out.extend([l for l in current_lines if not l.strip().startswith("#")])
-            #         setup_done = "~setup-done~" in out
-            #         if process_live and not setup_done and time.time() - section_start > wait_time:
-            #             loop_count = self.inline_log(loop_count, "")
-            #             count = abort_test(count, process_benchmark)
-            #             info_strings.append(f"Aborting due to time")
-            #             process_live = False
-            #     loop_count = self.inline_log(loop_count, "")
-            # info_strings.append(f"setup took {time.time()-section_start}s")
-            #
-            # benchmark_done = False
-            # section_start = time.time()
-            # wait_time = self.settings.benchmark_timeout * runs
-            # if process_live:
-            #     count = self.inline_log(count, "benchmark process: benchmarking, ")
-            #     loop_count = self.inline_log(0,"")
-            #     ram_usage = psutil.virtual_memory()[2] / 100.0
-            #     max_ram_usage = max(max_ram_usage, ram_usage)
-            #     if ram_usage > self.settings.ram_use_cap:
-            #         loop_count = self.inline_log(loop_count, "")
-            #         count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage * 100.0)}, ")
-            #         info_strings.append(f"Aborting due to Ram usage reaching {ram_usage * 100.0}%")
-            #     while process_live and not benchmark_done:
-            #         loop_count = self.inline_log(loop_count, ".", append=True)
-            #         try:
-            #             exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
-            #             process_live = False
-            #         except subprocess.TimeoutExpired as _:
-            #             pass
-            #         current_output = read_stdout.read()
-            #         current_lines = current_output.splitlines()
-            #         out.extend([l for l in current_lines if not l.strip().startswith("#")])
-            #         benchmark_done = "~benchmark-done~" in out
-            #         if process_live and not benchmark_done and time.time() - section_start > wait_time:
-            #             loop_count = self.inline_log(loop_count, "")
-            #             count = abort_test(count, process_benchmark)
-            #             info_strings.append(f"Aborting due to time")
-            #     loop_count = self.inline_log(loop_count, "")
-            # info_strings.append(f"benchmarking took {time.time() - section_start}s")
-            #
-            # testing_done = False
-            # section_start = time.time()
-            # wait_time = self.settings.testing_timeout * runs
-            # if process_live:
-            #     count = self.inline_log(count, "benchmark process: testing, ")
-            #     loop_count = self.inline_log(0,"")
-            #     ram_usage = psutil.virtual_memory()[2] / 100.0
-            #     max_ram_usage = max(max_ram_usage, ram_usage)
-            #     if ram_usage > self.settings.ram_use_cap:
-            #         loop_count = self.inline_log(loop_count, "")
-            #         count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage * 100.0)}, ")
-            #         info_strings.append(f"Aborting due to Ram usage reaching {ram_usage * 100.0}%")
-            #     while process_live and not testing_done:
-            #         loop_count = self.inline_log(loop_count, ".", append=True)
-            #         try:
-            #             exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
-            #             process_live = False
-            #         except subprocess.TimeoutExpired as _:
-            #             pass
-            #         current_output = read_stdout.read()
-            #         current_lines = current_output.splitlines()
-            #         out.extend([l for l in current_lines if not l.strip().startswith("#")])
-            #         testing_done = "~testing-done~" in out
-            #         if process_live and not testing_done and time.time() - section_start > wait_time:
-            #             loop_count = self.inline_log(loop_count, "")
-            #             count = abort_test(count, process_benchmark)
-            #             info_strings.append(f"Aborting due to time")
-            #     loop_count = self.inline_log(loop_count, "")
-            # info_strings.append(f"testing took {time.time() - section_start}s")
 
             testing_sections = [("setup", "~setup-done~", self.settings.setup_timeout),
                                 ("benchmark", "~benchmark-done~", self.settings.benchmark_timeout),
@@ -568,8 +478,14 @@ class Benchmark(abc.ABC, Generic[T, L]):
                     except subprocess.TimeoutExpired as _:
                         pass
                     current_output = read_stdout.read()
-                    current_lines = current_output.splitlines()
-                    out.extend([l for l in current_lines if not l.strip().startswith("#")])
+                    current_lines = current_output.splitlines(keepends=True)
+                    if len(current_lines) > 0:
+                        current_lines[0] = mid_line + current_lines[0]
+                        if not current_lines[-1].endswith("\n"):
+                            mid_line = current_lines[-1]
+                            current_lines = current_lines[:-1]
+                    non_comments = [l.strip() for l in current_lines if not l.strip().startswith("#")]
+                    out.extend(non_comments)
                     section_done = section_tag in out
                     if process_live and not section_done and time.time() - section_start > wait_time:
                         loop_count = self.inline_log(loop_count, "")

@@ -11,7 +11,6 @@ from io import StringIO
 import numpy as np
 
 import dtl
-from docs.Toy.toy.tests.test_add_sections import output_module
 from dtl import (
     VectorSpaceVariable,
     UnknownSizeVectorSpace,

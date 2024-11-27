@@ -224,20 +224,34 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
     def get_layouts(
         self, layout_graph: LayoutGraph, lib_builder: LibBuilder, tensor_variables: tuple[TensorVariable, ...], options: Options
     ) -> list[PtrMapping]:
+        dtl_config_map: dict[TupleStruct[TensorVariable], ReifyConfig] = (
+            self.get_configs_for_DTL_tensors(*tensor_variables)
+        )
+        def match_func(a, b):
+            if isinstance(a, tuple):
+                a_l, a_c = a
+                if not isinstance(a_l, LayoutGraph):
+                    return False
+                if not isinstance(a_c, dict):
+                    return False
+                if isinstance(b, tuple):
+                    b_l, b_c = b
+                    if not isinstance(b_l, LayoutGraph):
+                        return False
+                    if not isinstance(b_c, dict):
+                        return False
+                    return a_c == b_c and a_l.matches(b_l)
+            return False
 
-        match_func = lambda a, b: a.matches(b)
         found, key_int, layouts = self.search_store(
             self.layout_store,
-            layout_graph,
+            (layout_graph, dtl_config_map),
             match_function=match_func,
             lock=(not options["do-not-generate"]),
         )
 
         if not found and key_int >= 0:
             gen_path = layouts
-            dtl_config_map: dict[TupleStruct[TensorVariable], ReifyConfig] = (
-                self.get_configs_for_DTL_tensors(*tensor_variables)
-            )
             config_map = {}
             for tensor_var, config in dtl_config_map.items():
                 assert tensor_var in lib_builder.tensor_var_details
@@ -255,7 +269,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
             new_layouts = list(new_layouts)
             new_layouts.sort(key=lambda l: l.number)
             self.log("Writing new layouts to store")
-            self.write_store(self.layout_store, layout_graph, new_layouts, key_int)
+            self.write_store(self.layout_store, (layout_graph, dtl_config_map), new_layouts, key_int)
             layouts = new_layouts
         else:
             if layouts is None:

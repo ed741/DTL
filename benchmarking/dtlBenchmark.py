@@ -475,24 +475,25 @@ def make_setup_func_coo(
     assert len(arg_tensor_dims) == len(tensor_space.shape)
 
     zero_op = arith.Constant(IntegerAttr(0, IndexType()))
+    zero_i64_op = arith.Constant(IntegerAttr(0, builtin.i64))
     one_op = arith.Constant(IntegerAttr(1, IndexType()))
-    nnz_ub_op = arith.Constant(IntegerAttr(nnz, IndexType()))
-    setup_block.add_ops([zero_op, one_op, nnz_ub_op])
+    nnz_ub_i64_op = arith.Constant(IntegerAttr(nnz, builtin.i64))
+    setup_block.add_ops([zero_op, zero_i64_op, one_op, nnz_ub_i64_op])
 
     one_i64_op = arith.Constant(IntegerAttr(1, builtin.i64))
     setup_block.add_op(one_i64_op)
 
     dlt_s_coo_indexing_struct = llvm.LLVMStructType.from_type_list(
         ([llvm.LLVMPointerType.opaque()]*len(args_np_ptr_coord))
-        + [llvm.LLVMPointerType.opaque(), IndexType(), IndexType()]
+        + [llvm.LLVMPointerType.opaque(), builtin.i64, builtin.i64]
     )
     dlt_indexing_buffer_op = llvm.AllocaOp(one_i64_op.result, dlt_s_coo_indexing_struct)
     setup_block.add_op(dlt_indexing_buffer_op)
 
     idx_range_start_ptr_op = llvm.GEPOp(dlt_indexing_buffer_op.res, [0, len(args_np_ptr_coord) + 1], [], pointee_type=dlt_s_coo_indexing_struct)
     idx_range_end_ptr_op = llvm.GEPOp(dlt_indexing_buffer_op.res, [0, len(args_np_ptr_coord) + 2], [], pointee_type=dlt_s_coo_indexing_struct)
-    idx_range_start_store_op = llvm.StoreOp(zero_op.result, idx_range_start_ptr_op)
-    idx_range_end_store_op = llvm.StoreOp(nnz_ub_op.result, idx_range_end_ptr_op)
+    idx_range_start_store_op = llvm.StoreOp(zero_i64_op.result, idx_range_start_ptr_op)
+    idx_range_end_store_op = llvm.StoreOp(nnz_ub_i64_op.result, idx_range_end_ptr_op)
     setup_block.add_ops([idx_range_start_ptr_op, idx_range_end_ptr_op, idx_range_start_store_op, idx_range_end_store_op])
 
     for i, ptr in enumerate(list(args_np_ptr_coord)+[arg_np_ptr_val]):

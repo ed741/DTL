@@ -404,7 +404,7 @@ class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
         return {
             a: ReifyConfig(
                 dense=True,
-                unpacked_coo_buffer_options=frozenset([2]),
+                unpacked_coo_buffer_options=frozenset([]),
                 separated_coo_buffer_options=frozenset([2]),
                 separated_coo_buffer_index_options=frozenset([builtin.i32]),
                 coo_minimum_dims=1,
@@ -415,7 +415,7 @@ class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
             ),
             b: ReifyConfig(
                 dense=True,
-                unpacked_coo_buffer_options=frozenset([2]),
+                unpacked_coo_buffer_options=frozenset([]),
                 separated_coo_buffer_options=frozenset([2]),
                 separated_coo_buffer_index_options=frozenset([builtin.i32]),
                 coo_minimum_dims=1,
@@ -426,7 +426,7 @@ class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
             ),
             c: ReifyConfig(
                 dense=True,
-                unpacked_coo_buffer_options=frozenset([2]),
+                unpacked_coo_buffer_options=frozenset([]),
                 separated_coo_buffer_options=frozenset([2]),
                 separated_coo_buffer_index_options=frozenset([builtin.i32]),
                 coo_minimum_dims=1,

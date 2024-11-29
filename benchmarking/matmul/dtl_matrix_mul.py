@@ -362,6 +362,9 @@ class MatMulSparseDTLTest(BasicDTLTest):
     def get_id(self) -> ID_Tuple:
         return *super().get_id(), str(self.rate_a), str(self.rate_b)
 
+    def get_path_str(self) -> str:
+        return "_".join([str(p) for p in super().get_id()])
+
 
 class RandomSparseSingle(MatMulDenseDTL[MatMulSparseDTLTest]):
     def __init__(self, *args, rate_a: float = 0.0, rate_b: float = 0.0, **kwargs):

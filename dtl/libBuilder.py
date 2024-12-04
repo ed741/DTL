@@ -57,6 +57,7 @@ from xdsl.transforms.experimental.dlt.generate_dlt_identities import (
     DLTGeneratePtrIdentitiesRewriter,
     DLTSimplifyPtrIdentitiesRewriter,
 )
+from xdsl.transforms.experimental.dlt.layout_llvm_semantics import SemanticsMapper, load_all_semantics
 from xdsl.transforms.experimental.lower_dtl_to_dlt import DTLRewriter
 from xdsl.transforms.printf_to_llvm import PrintfToLLVM
 from xdsl.transforms.printf_to_putchar import PrintfToPutcharPass
@@ -998,6 +999,7 @@ class LibBuilder:
         new_order_map: dict[dlt.IterIdent, dlt.IterationOrder],
         graph_dir: str = None,
         output_dlt_path: str = None,
+        semantics: SemanticsMapper | None = None,
         verbose=2,
     ) -> tuple[dict[StringAttr, FunctionType], dict[str, FuncTypeDescriptor]]:
         if verbose > 0:
@@ -1079,20 +1081,22 @@ class LibBuilder:
             with open(output_dlt_path, 'wb') as xdsl_tmp:
                 xdsl_tmp.write(xdsl_module.getvalue().encode('utf8'))
 
+        if semantics is None:
+            semantics = load_all_semantics(SemanticsMapper())
         # DLT -> MLIR builtin
         dlt_to_llvm_applier = PatternRewriteWalker(
             GreedyRewritePatternApplier(
                 [
                     RemoveUnusedOperations(),
-                    lower_dlt_to_.DLTSelectRewriter(),
-                    lower_dlt_to_.DLTGetRewriter(),
-                    lower_dlt_to_.DLTGetSRewriter(),
-                    lower_dlt_to_.DLTSetRewriter(),
-                    lower_dlt_to_.DLTAllocRewriter(),
-                    lower_dlt_to_.DLTDeallocRewriter(),
-                    lower_dlt_to_.DLTIterateRewriter(),
-                    lower_dlt_to_.DLTCopyRewriter(),
-                    lower_dlt_to_.DLTExtractExtentRewriter(),
+                    lower_dlt_to_.DLTSelectRewriter(semantics),
+                    lower_dlt_to_.DLTGetRewriter(semantics),
+                    lower_dlt_to_.DLTGetSRewriter(semantics),
+                    lower_dlt_to_.DLTSetRewriter(semantics),
+                    lower_dlt_to_.DLTAllocRewriter(semantics),
+                    lower_dlt_to_.DLTDeallocRewriter(semantics),
+                    lower_dlt_to_.DLTIterateRewriter(semantics),
+                    lower_dlt_to_.DLTCopyRewriter(semantics),
+                    lower_dlt_to_.DLTExtractExtentRewriter(semantics),
                 ]
             ),
             walk_regions_first=False,
@@ -1111,7 +1115,7 @@ class LibBuilder:
             GreedyRewritePatternApplier(
                 [
                     lower_dlt_to_.DLTScopeRewriter(),
-                    lower_dlt_to_.DLTPtrTypeRewriter(recursive=True),
+                    lower_dlt_to_.DLTPtrTypeRewriter(semantics, recursive=True),
                     # lower_dlt_to_.DLTIndexTypeRewriter(recursive=True),
                     lower_dlt_to_.DLTIndexRangeTypeRewriter(recursive=True),
                 ]

@@ -119,10 +119,11 @@ class Benchmark(abc.ABC, Generic[T, L]):
 
     def parse_options(self, benchmark_options: list[str] = None) -> Options:
         if benchmark_options is None:
-            return {}
+            benchmark_options = {}
         return {"skip-testing":"--skip-testing" in benchmark_options,
+                "trial-only": "--trial-only" in benchmark_options,
                    "valgrind":"--valgrind" in benchmark_options,
-                "no-timeout":"--no-timeout" in benchmark_options,}
+                "no-timeout":"--no-timeout" in benchmark_options, }
 
     def run(self, benchmark_options: list[str] = None):
         options = self.parse_options(benchmark_options)
@@ -323,6 +324,8 @@ class Benchmark(abc.ABC, Generic[T, L]):
             runs_to_do = self.get_runs_to_do(test, loaded_results, options)
             if runs_to_do < 1:
                 self.log(f"Skipping test id: ({test.get_id_str()}), as test has {runs_to_do} runs.")
+            elif options["trial-only"]:
+                self.log(f"Skipping test id: ({test.get_id_str()}), as --trial-only is enabled.")
             else:
                 for rep in range(self.settings.repeats):
                     if (test.get_id(), rep) in loaded_results:

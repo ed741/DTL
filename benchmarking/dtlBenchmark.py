@@ -33,6 +33,7 @@ from xdsl.transforms.experimental.dlt.generate_dlt_layouts import (
 )
 from xdsl.transforms.experimental.dlt.iteration_map import IterationMap
 from xdsl.transforms.experimental.dlt.layout_graph import LayoutGraph
+from xdsl.transforms.experimental.dlt.layout_llvm_semantics import SemanticsMapper, load_all_semantics
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,15 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
     ) -> list[T_DTL]:
         raise NotImplementedError
 
+    def get_dlt_semantics(self, options: Options) -> SemanticsMapper | None:
+
+        semantics_flags = options["dlt-semantics"]
+        semantics = SemanticsMapper(
+            print_memory_calls = "print-memory-calls" in semantics_flags,
+        )
+        load_all_semantics(semantics)
+        return semantics
+
     def enumerate_tests(
         self,
         context: DLTCompileContext,
@@ -153,7 +163,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
             for t in self.make_tests_for(context, l, o)
         ]
 
-    def parse_options(self, benchmark_options: list[str] = None) -> dict[str, Any]:
+    def parse_options(self, benchmark_options: list[str] = None) -> Options:
         options = super().parse_options(benchmark_options)
         options["only-to-llvm"] = "--only-to-llvm" in benchmark_options
         options["no-mlir"] = "--no-mlir" in benchmark_options
@@ -164,6 +174,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         options["output-xdsl"] = "--output-xdsl" in benchmark_options
         options["output-mlir"] = "--output-mlir" in benchmark_options
 
+        dlt_semantics_flags = set()
         only_layouts = set()
         only_orders = set()
         for arg in benchmark_options:
@@ -171,12 +182,15 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                 only_layouts.add(int(arg.removeprefix("-l=")))
             elif arg.startswith("-o="):
                 only_orders.add(int(arg.removeprefix("-o=")))
+            elif arg.startswith("--dlt-semantics="):
+                dlt_semantics_flags.add(arg.removeprefix("--dlt-semantics="))
         if len(only_layouts) == 0:
             only_layouts = None
         if len(only_orders) == 0:
             only_orders = None
         options["only-layouts"] = only_layouts
         options["only-orders"] = only_orders
+        options["dlt-semantics"] = dlt_semantics_flags
 
         take_first_layouts = 0
         take_first_orders = 0
@@ -380,6 +394,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                 new_order.make_iter_dict(),
                 graph_dir=graph_path,
                 output_dlt_path=f"{lib_path}.dlt.ir" if options["output-dlt"] else None,
+                semantics=self.get_dlt_semantics(options),
                 verbose=0,
             )
             with open(func_types_path, "wb") as f:
@@ -438,6 +453,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                         new_order.make_iter_dict(),
                         graph_dir=graph_path,
                         output_dlt_path=f"{lib_path}.dlt.ir" if options["output-dlt"] else None,
+                        semantics=self.get_dlt_semantics(options),
                         verbose=0,
                     )
                     with open(func_types_path, "wb") as f:

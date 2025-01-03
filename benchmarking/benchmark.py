@@ -467,14 +467,16 @@ class Benchmark(abc.ABC, Generic[T, L]):
                 wait_time = section_timeout * runs
                 count = self.inline_log(count, f"benchmark process: {section_name}, ")
                 loop_count = self.inline_log(0,"")
-                ram_usage = psutil.virtual_memory()[2] / 100.0
-                max_ram_usage = max(max_ram_usage, ram_usage)
-                if ram_usage > self.settings.ram_use_cap:
-                    loop_count = self.inline_log(loop_count, "")
-                    count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage * 100.0)}, ")
-                    info_strings.append(f"Aborting due to Ram usage reaching {ram_usage * 100.0}%")
                 while process_live and not section_done:
                     loop_count = self.inline_log(loop_count, ".", append=True)
+
+                    ram_usage = psutil.virtual_memory()[2] / 100.0
+                    max_ram_usage = max(max_ram_usage, ram_usage)
+                    if ram_usage > self.settings.ram_use_cap:
+                        loop_count = self.inline_log(loop_count, "")
+                        count = abort_test(count, process_benchmark, msg=f"Ram%: {int(ram_usage * 100.0)}, ")
+                        info_strings.append(f"Aborting due to Ram usage reaching {ram_usage * 100.0}%")
+
                     try:
                         exit_code = process_benchmark.wait(min(busy_wait_time, wait_time))
                         process_live = False

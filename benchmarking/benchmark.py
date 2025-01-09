@@ -452,6 +452,8 @@ class Benchmark(abc.ABC, Generic[T, L]):
             out = []
             mid_line = ""
             info_strings = []
+            info_strings.append("runner command:")
+            info_strings.append(str(args))
 
             max_ram_usage = 0
 
@@ -689,7 +691,7 @@ class Benchmark(abc.ABC, Generic[T, L]):
                 np.savetxt(path+".txt", array)
             else:
                 np.savetxt(path, array)
-            self.log(f"Reference array saved to {path}")
+            self.log(f"Reference array '{scope_name}' saved to {path}")
         if is_arg:
             assert scope_name not in self.np_arg_paths
             self.np_arg_paths[scope_name] = dtype, path

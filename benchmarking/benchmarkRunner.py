@@ -36,7 +36,7 @@ def run_benchmark(
         if inline_updates:
             chars = inline_print(chars, "setting up: ")
         else:
-            print(f"#{time_stamp(time_stamps)} setting up")
+            print(f"#{time_stamp(time_stamps)} setting up", flush=True)
     benchmark_scopes = []
     arg_scopes = [{"lib": lib} | np_arg_arrays for _ in range(runs)]
     i_chars = 0
@@ -49,7 +49,7 @@ def run_benchmark(
     if print_updates and inline_updates:
         inline_print(i_chars, "")
     if progress_reports:
-        print("~setup-done~")
+        print("~setup-done~", flush=True)
 
     assert len(benchmark_scopes) == runs
 
@@ -61,16 +61,16 @@ def run_benchmark(
         if inline_updates:
             chars = inline_print(chars, "running benchmark...")
         else:
-            print(f"#{time_stamp(time_stamps)} running benchmark")
+            print(f"#{time_stamp(time_stamps)} running benchmark", flush=True)
     result = timeit(benchmark, number=1)
     if progress_reports:
-        print("~benchmark-done~")
+        print("~benchmark-done~", flush=True)
 
     if print_updates:
         if inline_updates:
             chars = inline_print(chars, "testing result: ")
         else:
-            print(f"#{time_stamp(time_stamps)} testing result")
+            print(f"#{time_stamp(time_stamps)} testing result", flush=True)
 
     results = {}
     for n, t in result_variables:
@@ -105,13 +105,13 @@ def run_benchmark(
         inline_print(i_chars, "")
 
     if progress_reports:
-        print("~testing-done~")
+        print("~testing-done~", flush=True)
 
     if print_updates:
         if inline_updates:
             chars = inline_print(chars, "cleaning: ")
         else:
-            print(f"#{time_stamp(time_stamps)} cleaning")
+            print(f"#{time_stamp(time_stamps)} cleaning", flush=True)
     i_chars = 0
     for i, scope in enumerate(benchmark_scopes):
         if print_updates and inline_updates:
@@ -121,13 +121,13 @@ def run_benchmark(
         inline_print(i_chars, "")
 
     if progress_reports:
-        print("~tear-down-done~")
+        print("~tear-down-done~", flush=True)
 
     if print_updates:
         if inline_updates:
             inline_print(chars, "")
         else:
-            print(f"#{time_stamp(time_stamps)} finished")
+            print(f"#{time_stamp(time_stamps)} finished", flush=True)
 
     return result, tuple([results[n] for n, t in result_variables])
 
@@ -272,9 +272,9 @@ if __name__ == "__main__":
         progress_reports=progress_reports,
     )
 
-    print(result_time)
+    print(result_time, flush=True)
     for r in results:
-        print(r)
+        print(r, flush=True)
 
     if progress_reports:
-        print("~results-done~")
+        print("~results-done~", flush=True)

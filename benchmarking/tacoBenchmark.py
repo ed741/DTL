@@ -45,7 +45,7 @@ class TacoTest(Test, abc.ABC):
     def get_test_path(self, tests_path: str) -> str:
         return f"{tests_path}/{self.get_path_str()}"
 
-    def get_load(self, tests_path: str) -> PythonCode:
+    def get_load(self, tests_path: str, rep: int) -> PythonCode:
         test_path = self.get_test_path(tests_path)
         code = (
             """

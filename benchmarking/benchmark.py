@@ -53,7 +53,7 @@ class Test(abc.ABC):
         return "-".join([str(p) for p in self.get_id()])
 
     @abc.abstractmethod
-    def get_load(self, tests_path: str) -> PythonCode:
+    def get_load(self, tests_path: str, rep: int) -> PythonCode:
         # must define 'lib'
         raise NotImplementedError
 
@@ -119,11 +119,15 @@ class Benchmark(abc.ABC, Generic[T, L]):
 
     def parse_options(self, benchmark_options: list[str] = None) -> Options:
         if benchmark_options is None:
-            benchmark_options = {}
+            benchmark_options = []
+        extra_tests = [int(s.removeprefix("--extra-test=")) for s in benchmark_options if s.startswith("--extra-test=")]
         return {"skip-testing":"--skip-testing" in benchmark_options,
                 "trial-only": "--trial-only" in benchmark_options,
                    "valgrind":"--valgrind" in benchmark_options,
-                "no-timeout":"--no-timeout" in benchmark_options, }
+                "no-timeout":"--no-timeout" in benchmark_options,
+                "no-skip":"--no-skip" in benchmark_options,
+                "extra-tests": extra_tests,
+                }
 
     def run(self, benchmark_options: list[str] = None):
         options = self.parse_options(benchmark_options)
@@ -312,7 +316,8 @@ class Benchmark(abc.ABC, Generic[T, L]):
 
         loaded_results = self.load_existing_results()
 
-        tests = self.remove_skipable_tests(tests, loaded_results)
+        if not options["no-skip"]:
+            tests = self.remove_skipable_tests(tests, loaded_results)
 
         count = 0
         tests_to_run = len(tests)
@@ -371,6 +376,20 @@ class Benchmark(abc.ABC, Generic[T, L]):
         universal_result_string = f"runs: {test_runs}, time: {test_time}, wait time: {test_w_time}, finished: {test_fin}"
         custom_result_string = ", ".join([f"{n}: {r}" for ((n, t), r) in zip(test.get_result_headings(), res)])
         self.end_inline_log(count, universal_result_string + " :: " + custom_result_string)
+
+        if test_fin:
+            for extra_test_id in options["extra-tests"]:
+                if (test.get_id(), extra_test_id) not in loaded_results:
+                    lib = self.get_lib(test, options, load=False)
+                    count = self.start_inline_log(f"extra ({extra_test_id}) test starting in new process: ")
+                    extra_u_res, extra_res = self.run_external_test(test, 1, extra_test_id, options)
+                    self.write_result(test, extra_test_id, extra_u_res, extra_res)
+                    e_test_runs, e_test_time, e_test_w_time, e_test_fin = extra_u_res
+                    universal_result_string = f"runs: {e_test_runs}, time: {e_test_time}, wait time: {e_test_w_time}, finished: {e_test_fin}"
+                    custom_result_string = ", ".join(
+                        [f"{n}: {r}" for ((n, t), r) in zip(test.get_result_headings(), res)])
+                    self.end_inline_log(count, universal_result_string + " :: " + custom_result_string)
+
         trial_time = test_time / test_runs
         return self.get_runs_for_time(trial_time)
 
@@ -421,7 +440,7 @@ class Benchmark(abc.ABC, Generic[T, L]):
         for name, type in test.get_result_headings():
             t = {int: "i", bool: "b", float: "f"}[type]
             args.append(f"-o:{t}={name}")
-        args.extend(["--load", test.get_load(self.get_tests_path())])
+        args.extend(["--load", test.get_load(self.get_tests_path(), rep)])
         args.extend(["--setup", test.code.setup])
         args.extend(["--benchmark", test.code.benchmark])
         args.extend(["--test", test.code.test])

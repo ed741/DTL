@@ -71,8 +71,11 @@ class DLTTest(Test, abc.ABC):
     def get_test_path(self, tests_path: str) -> str:
         return f"{tests_path}/{self.get_path_str()}"
 
-    def get_load(self, tests_path: str) -> PythonCode:
+    def get_load(self, tests_path: str, rep: int) -> PythonCode:
+        # rep = -2 means it's a mem test
         test_path = self.get_test_path(tests_path)
+        if rep == -2:
+            test_path += "/mem"
         code = """
 import pickle
 from dtl.libBuilder import DTLCLib, FuncTypeDescriptor
@@ -141,15 +144,6 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
     ) -> list[T_DTL]:
         raise NotImplementedError
 
-    def get_dlt_semantics(self, options: Options) -> SemanticsMapper | None:
-
-        semantics_flags = options["dlt-semantics"]
-        semantics = SemanticsMapper(
-            print_memory_calls = "print-memory-calls" in semantics_flags,
-        )
-        load_all_semantics(semantics)
-        return semantics
-
     def enumerate_tests(
         self,
         context: DLTCompileContext,
@@ -174,7 +168,6 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         options["output-xdsl"] = "--output-xdsl" in benchmark_options
         options["output-mlir"] = "--output-mlir" in benchmark_options
 
-        dlt_semantics_flags = set()
         only_layouts = set()
         only_orders = set()
         for arg in benchmark_options:
@@ -182,15 +175,12 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                 only_layouts.add(int(arg.removeprefix("-l=")))
             elif arg.startswith("-o="):
                 only_orders.add(int(arg.removeprefix("-o=")))
-            elif arg.startswith("--dlt-semantics="):
-                dlt_semantics_flags.add(arg.removeprefix("--dlt-semantics="))
         if len(only_layouts) == 0:
             only_layouts = None
         if len(only_orders) == 0:
             only_orders = None
         options["only-layouts"] = only_layouts
         options["only-orders"] = only_orders
-        options["dlt-semantics"] = dlt_semantics_flags
 
         take_first_layouts = 0
         take_first_orders = 0
@@ -339,7 +329,8 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         self, test: T_DTL, test_path: str, options: Options, load: bool = True
     ) -> DTLCLib | None:
         # test_path = test.get_test_path(tests_path)
-        return self.get_compiled_lib(
+
+        lib = self.get_compiled_lib(
             test.layout,
             test.order,
             test.context,
@@ -349,6 +340,24 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
             options,
             load=load,
         )
+
+        if -2 in options["extra-tests"]:
+            semantics = SemanticsMapper(
+                print_memory_calls=True,
+            )
+            load_all_semantics(semantics)
+            self.get_compiled_lib(
+                test.layout,
+                test.order,
+                test.context,
+                test_path + "/mem",
+                test.get_lib_name(),
+                test.get_func_types_name(),
+                options,
+                load=False,
+                semantics=semantics,
+            )
+        return lib
 
     def get_compiled_lib(
         self,
@@ -360,9 +369,12 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         func_types_name: str,
         options: Options,
         load: bool = True,
+        semantics : SemanticsMapper = None,
     ) -> DTLCLib | None:
+        custom_compile_str = "Custom ::" if semantics is not None else ""
+
         self.start_inline_log(
-            f"Getting lib for: l: {new_layout.number}, o: {new_order.number} :: "
+            f"Getting lib for: l: {new_layout.number}, o: {new_order.number} ::{custom_compile_str}"
         )
 
         module: ModuleOp = context.module
@@ -394,7 +406,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                 new_order.make_iter_dict(),
                 graph_dir=graph_path,
                 output_dlt_path=f"{lib_path}.dlt.ir" if options["output-dlt"] else None,
-                semantics=self.get_dlt_semantics(options),
+                semantics=semantics,
                 verbose=0,
             )
             with open(func_types_path, "wb") as f:
@@ -453,7 +465,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                         new_order.make_iter_dict(),
                         graph_dir=graph_path,
                         output_dlt_path=f"{lib_path}.dlt.ir" if options["output-dlt"] else None,
-                        semantics=self.get_dlt_semantics(options),
+                        semantics=semantics,
                         verbose=0,
                     )
                     with open(func_types_path, "wb") as f:
@@ -480,12 +492,18 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
                         0, f"compiled to LLVM: {llvm_path} but no lib was produced."
                     )
                     return None
-                else:
+                elif load:
                     self.end_inline_log(
                         0,
                         f"compiled to binary. LLVM: generated, lib: {lib._library_path}",
                     )
                     return lib
+                else:
+                    self.end_inline_log(
+                        0,
+                        f"compiled to binary. LLVM: generated, lib (not loaded): {lib_path}",
+                    )
+                    return None
 
 def make_setup_func_coo(
     lib_builder: LibBuilder, name: str, t_var: TensorVariable, nnz: int

@@ -861,6 +861,11 @@ class LibBuilder:
     def prepare(self, verbose=2) -> tuple[ModuleOp, LayoutGraph, IterationMap]:
         if verbose > 0:
             print(f"Preparing module")
+        fflush_func = llvm.FuncOp(
+            "fflush",
+            llvm.LLVMFunctionType([llvm.LLVMPointerType.opaque()], None),
+            linkage=llvm.LinkageAttr("external"),
+        )
         malloc_func = llvm.FuncOp(
             "malloc",
             llvm.LLVMFunctionType([builtin.i64], llvm.LLVMPointerType.opaque()),
@@ -912,7 +917,7 @@ class LibBuilder:
             self.funcs,
         )
         module = ModuleOp(
-            [malloc_func, realloc_func, free_func, memcpy_func, memmove_func, abort_func, scope_op]
+            [fflush_func, malloc_func, realloc_func, free_func, memcpy_func, memmove_func, abort_func, scope_op]
         )
         module.verify()
 

@@ -267,8 +267,8 @@ class Pair(MatMulDenseDTL[BasicDTLTest]):
             ),
             c: ReifyConfig(
                 dense=True,
-                unpacked_coo_buffer_options=frozenset([2]),
-                separated_coo_buffer_options=frozenset([2]),
+                unpacked_coo_buffer_options=frozenset([]),
+                separated_coo_buffer_options=frozenset([]),
                 separated_coo_buffer_index_options=frozenset([builtin.i32]),
                 coo_minimum_dims=1,
                 arith_replace=True,

@@ -411,7 +411,10 @@ if __name__ == "__main__":
             waste_of_time_threshold=0.1,
             test_too_short_threshold=0.001,
             long_run_multiplier=100,
-            benchmark_timeout=3.0,
+            setup_timeout=50.0,
+            benchmark_timeout=5.0,
+            testing_timeout=5.0,
+            tear_down_timeout=5.0,
             benchmark_trial_child_process=True,
             benchmark_in_child_process=True,
         )
@@ -430,7 +433,10 @@ if __name__ == "__main__":
             waste_of_time_threshold=0.1,
             test_too_short_threshold=0.001,
             long_run_multiplier=100,
+            setup_timeout=140.0,
             benchmark_timeout=5.0,
+            testing_timeout=50.0,
+            tear_down_timeout=50.0,
             benchmark_trial_child_process=True,
             benchmark_in_child_process=True,
         )

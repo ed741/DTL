@@ -65,6 +65,7 @@ with open(table_path, "a") as f:
                 str(len(layouts)),
             ]
         )
+        f.flush()
 
 
 print(results)

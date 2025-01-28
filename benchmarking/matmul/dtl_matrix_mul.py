@@ -597,7 +597,7 @@ if __name__ == "__main__":
         repeats=3,
         waste_of_time_threshold=0.01,
         test_too_short_threshold=0.0005,
-        long_run_multiplier=10,
+        long_run_multiplier=1,
         setup_timeout=3.0,
         benchmark_timeout=2.0,
         testing_timeout=2.0,

@@ -7,6 +7,7 @@ from collections import namedtuple
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
 from scipy.optimize import direct
 
 from xdsl.dialects.experimental import dlt
@@ -30,6 +31,12 @@ if "OUTPUT_DATA_DIR" in os.environ:
 else:
     OUTPUT_DATA_DIR = "./data"
 
+
+def get_experiment_dir(experiment_name: str) -> str:
+    return f"{RESULTS_DIR_BASE}/{experiment_name}"
+
+def get_data_dir(experiment_name: str):
+    return f"{OUTPUT_DATA_DIR}/{experiment_name}"
 
 def parse_bool(input: str) -> bool:
     if input in ["True", "true"]:
@@ -109,8 +116,8 @@ def get_test_path(experiment_path: str, program_id: tuple[Any,...]) -> str:
 
 
 MemoryStats = namedtuple("MemoryStats", ["mallocs", "reallocs", "frees", "realloc_mallocs", "running_total", "allocated_total", "freed_total", "allocated_best_case", "allocated_worst_case", "max"])
-def parse_for_memory_use(experiment_path: str, path_id: tuple[Any,...], rest_of_id: tuple[Any,...]) -> tuple[MemoryStats, MemoryStats, MemoryStats, MemoryStats]:
-    dump_path = get_dump_path(experiment_path, path_id, rest_of_id, -2)
+def parse_for_memory_use(experiment_path: str, program_id: tuple[Any,...], test_id: tuple[Any,...]) -> tuple[MemoryStats, MemoryStats, MemoryStats, MemoryStats]:
+    dump_path = get_dump_path(experiment_path, program_id, test_id, -2)
     path = f"{dump_path}/stdout"
 
     stages = ["~setup-done~", "~benchmark-done~", "~testing-done~", "~tear-down-done~"]
@@ -317,3 +324,75 @@ def layout_airth_replaced(layout: dlt.Layout) -> list[set[str]]:
             arith_node = typing.cast(dlt.ArithReplaceLayoutAttr, node)
             r.append({p.outer_dimension.dimensionName.data for p in arith_node.replacements})
     return r
+
+
+##https://stackoverflow.com/questions/32791911/fast-calculation-of-pareto-front-in-python
+# Faster than is_pareto_efficient_simple, but less readable.
+def is_pareto_efficient(costs, return_mask = True):
+    """
+    Find the pareto-efficient points
+    :param costs: An (n_points, n_costs) array
+    :param return_mask: True to return a mask
+    :return: An array of indices of pareto-efficient points.
+        If return_mask is True, this will be an (n_points, ) boolean array
+        Otherwise it will be a (n_efficient_points, ) integer array of indices.
+    """
+    is_efficient = np.arange(costs.shape[0])
+    n_points = costs.shape[0]
+    next_point_index = 0  # Next index in the is_efficient array to search for
+    while next_point_index<len(costs):
+        nondominated_point_mask = np.any(costs<costs[next_point_index], axis=1)
+        nondominated_point_mask[next_point_index] = True
+        is_efficient = is_efficient[nondominated_point_mask]  # Remove dominated points
+        costs = costs[nondominated_point_mask]
+        next_point_index = np.sum(nondominated_point_mask[:next_point_index])+1
+    if return_mask:
+        is_efficient_mask = np.zeros(n_points, dtype = bool)
+        is_efficient_mask[is_efficient] = True
+        return is_efficient_mask
+    else:
+        return is_efficient
+
+
+last_progress_log = ""
+last_progress_log_total = 0
+last_progress_log_value = 0
+
+def log_progress_start(total: int, start_val: int = 0):
+    global last_progress_log
+    global last_progress_log_total
+    global last_progress_log_value
+    last_progress_log_total = total
+    last_progress_log_value = start_val
+    last_progress_log = f"{0}/{total} ({0:.1%})"
+    print(last_progress_log, end="")
+
+def log_progress_tick( value: int = None, increment: int = 1):
+    global last_progress_log
+    global last_progress_log_total
+    global last_progress_log_value
+    if value is not None:
+        last_progress_log_value = value
+    else:
+        last_progress_log_value += increment
+    string = f"{last_progress_log_value}/{last_progress_log_total} ({(last_progress_log_value / last_progress_log_total):.1%})"
+    print('\b'*len(last_progress_log) + string, end="")
+    last_progress_log = string
+
+
+def log_progress_end():
+    global last_progress_log
+    global last_progress_log_total
+    print("")
+    last_progress_log = ""
+    last_progress_log_total = 0
+
+
+def write_experiment_info_map(experiment_name: str, experiment_info_map: dict[str, Any], output_info_filename: str = "info.tex"):
+    info_path = f"{get_data_dir(experiment_name)}/{output_info_filename}"
+    with open(info_path, "w") as f:
+        for i, v in experiment_info_map.items():
+            f.write(r"\newcommand{\dataInfo" + i.replace("_", "") + r"}{" + str(v) + "}\n")
+    print(f"Written info to {info_path}")
+
+

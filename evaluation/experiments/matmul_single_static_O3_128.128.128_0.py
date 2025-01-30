@@ -67,7 +67,7 @@ def gen_func(ptr_map: dict[str, PtrType])-> dict[str,str]:
             }
 
 generate_data(experiment_name,
-              test_key = [("layout",int),("order",int)],
+              test_key_def= [("layout", int), ("order", int)],
               program_keys = ["layout","order"],
               layout_targets = target_layouts,
               layout_gen=gen_func,

@@ -54,7 +54,7 @@ with open(table_path, "a") as f:
         layout_graph.add_ssa_value(allocate.res)
 
 
-        generator = LayoutGenerator(layout_graph, {ptr_type.identification:reify_config})
+        generator = LayoutGenerator(layout_graph, {ptr_type.identification:reify_config}, plot_dir=f"./count_layout_plots/{n}")
         generator._generated_layouts = previous_generated_layouts
         layouts = generator.generate_mappings()
         print(f" for n = {n}: |layouts| = {len(layouts)}")
@@ -69,4 +69,6 @@ with open(table_path, "a") as f:
 
 
 print(results)
+
+
 

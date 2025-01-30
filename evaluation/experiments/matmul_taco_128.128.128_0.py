@@ -36,7 +36,7 @@ def tests_func(stat: Stat, path: str) -> dict[str, str]:
     return map
 
 generate_data(experiment_name,
-              test_key = [("taco_layout",int)],
+              test_key_def= [("taco_layout", int)],
               program_keys = ["taco_layout"],
               layout_targets = None,
               layout_gen=None,

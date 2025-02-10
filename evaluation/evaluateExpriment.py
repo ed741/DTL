@@ -294,6 +294,7 @@ def generate_data(
     tests_export: list[str] = None,
     experiment_info_map: dict[str, str] = None,
     grouped_stats: list[tuple[Callable[[Stat], str], list[tuple[str, Callable[[Stat], Any], str]]]] = None,
+    skip_stat_func: Callable[[Stat], bool] = lambda s: False,
 ) -> tuple[list[Stat], dict[str, Any]]:
 
     if test_key_def is None:
@@ -420,6 +421,8 @@ def generate_data(
                 ]
             )
             for stat in stats:
+                if skip_stat_func(stat):
+                    continue
                 export_stats = stat_gen(stat)
 
                 csv_writer.writerow(
@@ -427,7 +430,7 @@ def generate_data(
                         *stat.test_key,
                         stat.runs,
                         *[stat.time[s] for s in (time_options if time_options is not None else [])],
-                        *[stat.idx_by[s] for s in (idx_time_options if time_options is not None else [])],
+                        *[stat.idx_by[s] for s in (idx_time_options if idx_time_options is not None else [])],
                         *[str(stat.info_map[s]) for s in layout_export],
                         *[str(export_stats[s]) for s in stat_export],
                         *[str(stat.info_map[s]) for s in tests_export]
@@ -436,7 +439,7 @@ def generate_data(
         print(f"Written table to {table_path}")
 
     if output_info_filename:
-        et.write_experiment_info_map(experiment_name, output_info_filename, experiment_info_map)
+        et.write_experiment_info_map(experiment_name, experiment_info_map, output_info_filename)
 
     print("Experiment Info Map::")
     for key, val in experiment_info_map.items():

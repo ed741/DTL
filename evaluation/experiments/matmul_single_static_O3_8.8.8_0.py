@@ -31,5 +31,6 @@ generate_data(experiment_name,
                   "CSparseI",
                   "CSparseK",
               ],
+              time_options=["median"],
               instances=(100,1000),
               )

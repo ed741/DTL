@@ -204,9 +204,9 @@ pareto_columns = {
     "rate":lambda stat: stat.test_key[2],
     "runs":lambda stat: stat.runs,
     "median":lambda stat: stat.time["median"],
-    "multSparseAB":lambda stat: array_info_map[rate]["MultSparseAB"],
-    "nnzAB":lambda stat: array_info_map[rate]["NnzA"] + array_info_map[rate]["NnzB"],
-    "nnzC":lambda stat: array_info_map[rate]["NnzC"],
+    "multSparseAB":lambda stat: array_info_map[stat.test_key[2]]["MultSparseAB"],
+    "nnzAB":lambda stat: array_info_map[stat.test_key[2]]["NnzA"] + array_info_map[stat.test_key[2]]["NnzB"],
+    "nnzC":lambda stat: array_info_map[stat.test_key[2]]["NnzC"],
     "memTotal":lambda stat: stat.info_map.get("all_allocated_total", float('nan')),
     "memSetup":lambda stat: stat.info_map.get("setup_allocated_total", float('nan')),
     "memBench":lambda stat: stat.info_map.get("benchmark_allocated_total", float('nan')),
@@ -219,7 +219,7 @@ pareto_columns = {
 for stat in fastest_layout_stats_ordered:
     stat.info_map["ParetoFront"] = 0
 costa = lambda stat: stat.time["median"]
-costb = (lambda stat: stat.info_map["all_allocated_total"] / (array_info_map[rate]["NnzA"] + array_info_map[rate]["NnzB"] + array_info_map[rate]["NnzC"]))
+costb = (lambda stat: stat.info_map["all_allocated_total"] / (array_info_map[stat.test_key[2]]["NnzA"] + array_info_map[stat.test_key[2]]["NnzB"] + array_info_map[stat.test_key[2]]["NnzC"]))
 
 max_all_a = max([costa(s) for s in fastest_layout_stats_ordered])
 max_all_b = max([costb(s) for s in fastest_layout_stats_ordered])
@@ -303,9 +303,9 @@ columns = {
     "rate":lambda stat: stat.test_key[2],
     "runs":lambda stat: stat.runs,
     "median":lambda stat: stat.time["median"],
-    "multSparseAB":lambda stat: array_info_map[rate]["MultSparseAB"],
-    "nnzAB":lambda stat: array_info_map[rate]["NnzA"] + array_info_map[rate]["NnzB"],
-    "nnzC":lambda stat: array_info_map[rate]["NnzC"],
+    "multSparseAB":lambda stat: array_info_map[stat.test_key[2]]["MultSparseAB"],
+    "nnzAB":lambda stat: array_info_map[stat.test_key[2]]["NnzA"] + array_info_map[stat.test_key[2]]["NnzB"],
+    "nnzC":lambda stat: array_info_map[stat.test_key[2]]["NnzC"],
     "memTotal":lambda stat: stat.info_map.get("all_allocated_total", float('nan')),
     "memSetup":lambda stat: stat.info_map.get("setup_allocated_total", float('nan')),
     "memBench":lambda stat: stat.info_map.get("benchmark_allocated_total", float('nan')),

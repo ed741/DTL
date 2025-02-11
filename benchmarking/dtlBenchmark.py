@@ -329,7 +329,11 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
         self, test: T_DTL, test_path: str, options: Options, load: bool = True
     ) -> DTLCLib | None:
         # test_path = test.get_test_path(tests_path)
-
+        semantics = SemanticsMapper(
+            print_memory_calls=False,
+            reverse_sparse_index_increment=False,
+        )
+        load_all_semantics(semantics)
         lib = self.get_compiled_lib(
             test.layout,
             test.order,
@@ -339,6 +343,7 @@ class DTLBenchmark(Benchmark[T_DTL, DTLCLib], abc.ABC, Generic[T_DTL]):
             test.get_func_types_name(),
             options,
             load=load,
+            semantics=semantics
         )
 
         if -2 in options["extra-tests"]:

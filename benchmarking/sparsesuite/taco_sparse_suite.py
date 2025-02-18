@@ -421,7 +421,7 @@ if __name__ == "__main__":
         benchmarks.append(
             SCircuit(
                 "./results",
-                3,
+                4,
                 _Epsilon,
                 scircuit_settings
             )
